@@ -1,0 +1,14 @@
+# Personal spec files
+spec.md
+
+# Local install artifacts
+*.backup.*
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Editor
+.vscode/
+*.swp
