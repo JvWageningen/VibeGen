@@ -1,4 +1,4 @@
-# vibegen — Fully Automatic Python Project Generator (Windows)
+# vibegen — Fully Automatic Python Project Generator (cross-platform)
 
 Generate complete, tested Python projects from a plain-English specification,
 then continue developing them with Claude Code in VS Code.
@@ -7,15 +7,38 @@ then continue developing them with Claude Code in VS Code.
 
 ## Prerequisites
 
-You need three things, all of which the setup script can install for you:
+You need three things:
 
-- **Git for Windows** — download from https://git-scm.com/download/win (Claude Code uses Git Bash internally, so this is non-negotiable)
-- **Claude Code CLI** — the native Windows installer requires no Node.js
-- **uv** — Python package and project manager
+- **Git** — install from https://git-scm.com/downloads
+- **Claude Code CLI** — install via the native installer (no Node.js required)
+- **uv** — Python package and project manager (`pip install uv` or `uv install`)
+
+> **Windows note:** Claude Code uses Git Bash internally, so a Git for Windows installation is recommended.
 
 ---
 
 ## Installation
+
+### Recommended (pip / pipx)
+
+From the repository root:
+
+```bash
+python -m pip install --upgrade pip
+pip install .
+```
+
+If you use `pipx`:
+
+```bash
+pipx install .
+```
+
+This installs a cross-platform `vibegen` CLI that works on Windows, macOS, and Linux.
+
+### Legacy (Windows PowerShell installer)
+
+If you prefer the original PowerShell installer (Windows only):
 
 1. Download all four files into a folder (e.g., `C:\Users\you\vibegen\`):
    - `setup-vibegen.ps1`
@@ -77,6 +100,41 @@ vibegen spec.md -Model claude-opus-4-6
 
 # See everything Claude does
 vibegen spec.md -Verbose
+```
+
+---
+
+## Development (uv, ruff, pytest, mypy, radon)
+
+Install dev dependencies:
+
+```bash
+uv add -d ruff pytest pytest-cov mypy radon
+```
+
+Run lint/format:
+
+```bash
+uv run ruff check . --fix
+uv run ruff format .
+```
+
+Run tests:
+
+```bash
+uv run pytest
+```
+
+Run type checking:
+
+```bash
+uv run mypy src/
+```
+
+Run cyclomatic complexity report:
+
+```bash
+uv run radon cc src/ -mi C
 ```
 
 ---
