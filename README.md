@@ -9,68 +9,41 @@ then continue developing them with Claude Code in VS Code.
 
 You need three things:
 
+- **Python 3.8+** — install from https://www.python.org/downloads
 - **Git** — install from https://git-scm.com/downloads
-- **Claude Code CLI** — install via the native installer (no Node.js required)
-- **uv** — Python package and project manager (`pip install uv` or `uv install`)
-
-> **Windows note:** Claude Code uses Git Bash internally, so a Git for Windows installation is recommended.
+- **uv** — Python package and project manager (`pip install uv`)
 
 ---
 
 ## Installation
 
-### Recommended (pip / pipx)
-
-From the repository root:
+Clone the repository and install:
 
 ```bash
+git clone https://github.com/JvWageningen/VibeGen.git
+cd VibeGen
 python -m pip install --upgrade pip
 pip install .
 ```
 
-If you use `pipx`:
+The `vibegen` command is now available globally on Windows, macOS, and Linux.
 
-```bash
-pipx install .
-```
-
-This installs a cross-platform `vibegen` CLI that works on Windows, macOS, and Linux.
-
-### Legacy (Windows PowerShell installer)
-
-If you prefer the original PowerShell installer (Windows only):
-
-1. Download all four files into a folder (e.g., `C:\Users\you\vibegen\`):
-   - `setup-vibegen.ps1`
-   - `vibegen.ps1`
-   - `spec.example.md`
-   - this README
-
-2. Open PowerShell and run:
-
-```powershell
-cd C:\Users\you\vibegen
-Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
-.\setup-vibegen.ps1
-```
-
-3. Restart your terminal. The `vibegen` command is now available globally.
+You'll also need an LLM provider:
+- **Claude Code CLI** — install from https://console.anthropic.com/dashboard (for Claude models)
+- **Ollama** — install from https://ollama.com (for open models like qwen2.5-coder:14b)
 
 ---
 
 ## Usage: Generate a Project
 
-```powershell
-# 1. Copy the spec template
-copy $env:USERPROFILE\.vibegen\templates\spec.template.md .\spec.md
+```bash
+# 1. Create a project specification
+echo '# My Project\n\n## Overview\nA command-line tool that...\n\n## Modules\n- module1: description\n- module2: description' > spec.md
 
-# 2. Edit it with your requirements
-code spec.md
+# 2. Generate the project
+vibegen create spec.md
 
-# 3. Generate
-vibegen spec.md
-
-# 4. Open in VS Code and keep building
+# 3. Open in VS Code and continue developing
 cd my-project
 code .
 ```
@@ -79,27 +52,25 @@ code .
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-OutputDir <path>` | `.\<project-name>` | Where to create the project |
-| `-MaxFixAttempts <n>` | `3` | How many test-fix iterations |
-| `-MaxTurns <n>` | `30` | Max Claude agent turns per step |
-| `-Model <model>` | `claude-sonnet-4-5-20250929` | Claude model |
-| `-SkipPermissions` | off | Bypass safety prompts (containers only) |
-| `-Verbose` | off | Show full Claude output |
+| `--output <path>` | `./<project-name>` | Where to create the project |
+| `--model <model>` | `claude-sonnet-4-5-20250929` | LLM model to use |
+| `--provider <provider>` | `claude` | LLM provider: `claude` or `ollama` |
+| `--verbose` | off | Show detailed output |
 
 ### Examples
 
-```powershell
-# Basic
-vibegen spec.md
+```bash
+# Basic usage
+vibegen create spec.md
 
-# Custom output and more fix attempts
-vibegen spec.md -OutputDir C:\projects\my-tool -MaxFixAttempts 5
+# Custom output directory
+vibegen create spec.md --output ./projects/my-tool
 
-# Use the strongest model for complex projects
-vibegen spec.md -Model claude-opus-4-6
+# Use Ollama with local model
+vibegen create spec.md --provider ollama --model qwen2.5-coder:14b
 
-# See everything Claude does
-vibegen spec.md -Verbose
+# See detailed generation progress
+vibegen create spec.md --verbose
 ```
 
 ---
@@ -180,7 +151,7 @@ you open it in VS Code and switch to the semi-automatic workflow.
 
 ### Open the project
 
-```powershell
+```bash
 cd my-project
 code .
 ```
@@ -222,7 +193,7 @@ Claude is available in the sidebar for questions:
 
 The pre-commit hooks run Ruff automatically on `git commit`. For the full check:
 
-```powershell
+```bash
 uv run ruff check . --fix
 uv run ruff format .
 uv run pytest -x
@@ -233,60 +204,57 @@ Or just type `/fix` in Claude Code and let it handle everything.
 
 ---
 
-## Windows-Specific Notes
+## Platform Notes
 
-### Path separators
+### Python Interpreter
 
-Python and uv handle forward slashes on Windows, so paths in `pyproject.toml`
-and code will work fine. The `.vscode/settings.json` uses the Windows Python
-path (`Scripts/python.exe` instead of `bin/python`).
+The generated `.vscode/settings.json` points to the local virtual environment Python
+interpreter. If VS Code can't find it, run `uv sync` to recreate the `.venv`
+directory and reload VS Code (`Ctrl+Shift+P` → "Reload Window").
 
-### Line endings
+### Line Endings
 
-The generated `.vscode/settings.json` sets `"files.eol": "\n"` so all Python
-files use Unix-style line endings. This prevents issues with tools like Ruff
-and pytest that expect `\n`.
+The generated `.vscode/settings.json` sets `"files.eol": "\n"` to ensure
+Unix-style line endings across all platforms. This prevents compatibility issues
+with linting and testing tools.
 
-### Claude Code and Git Bash
+### LLM Provider Setup
 
-Claude Code on Windows uses Git Bash internally to run shell commands. This
-means bash commands in Claude's output (like `&&` chains) work correctly.
-You don't need to run PowerShell as Administrator.
-
-### Python interpreter
-
-The `.vscode/settings.json` points to `.venv/Scripts/python.exe` (the Windows
-path). If VS Code can't find the interpreter, run `uv sync` once to recreate
-the virtual environment, then reload the window (`Ctrl+Shift+P` → "Reload Window").
-
-### Execution Policy
-
-If PowerShell blocks the script with a red error, run this once:
-
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+**For Claude models:**
+```bash
+export ANTHROPIC_API_KEY="your-api-key"
 ```
 
-This allows locally-created scripts to run while still blocking unsigned
-scripts downloaded from the internet.
+**For Ollama models:**
+```bash
+# Make sure Ollama is running
+ollama pull qwen2.5-coder:14b
+```
 
 ---
 
 ## Tips
 
-**Iterate on your spec before generating.** A 10-minute investment in a
-detailed spec saves an hour of post-generation fixes.
+**Write a detailed specification.** A clear, well-structured spec with concrete examples improves code quality. Include:
+- Overview of what the tool does
+- List of modules and their responsibilities
+- Key functions/classes for each module
+- Any external dependencies or APIs
+- Example usage or typical workflows
 
-**Use `-Verbose` the first time.** Seeing Claude's full output helps you
-understand what it's doing and spot issues early.
+**Use `--verbose` for debugging.** If generated code has issues, run with `--verbose` to see full LLM responses and understand what went wrong.
 
-**Check the git log after generation.** Every step is a separate commit.
-Run `git log --oneline` to see the history, `git diff HEAD~2` to review
-recent changes, or `git reset --hard HEAD~1` to undo the last step.
+**Review generated code immediately.** Open the project and skim generated files right after creation. Fix obvious issues in the spec for the next run.
 
-**Update CLAUDE.md as you go.** When Claude makes a mistake during manual
-development, add a rule to `CLAUDE.md` so it doesn't happen again. Press `#`
-in Claude Code to quickly append a note.
+**Build iteratively.** Start with a simple spec, generate, review the output, then refine the spec and regenerate. This is much faster than trying to get the spec perfect on the first try.
 
-**Use `/compact` in long sessions.** When the Claude Code context window fills
-up, run `/compact Focus on the API changes` to summarize and free up space.
+**Check the git history.** Every generation step creates a commit:
+```bash
+git log --oneline
+git diff HEAD~5  # Review last 5 steps
+git reset --hard HEAD~1  # Undo if needed
+```
+
+**Update CLAUDE.md during manual development.** When fixing bugs or adding features manually, update `CLAUDE.md` with project-specific rules so Claude Code follows your conventions in future edits.
+
+**Mix LLM providers.** Use Ollama for fast iteration and Claude for complex problems. Just change the `--provider` and `--model` flags between runs.

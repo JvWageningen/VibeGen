@@ -832,8 +832,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.repair:
-        _print_step("Repair mode is not yet fully implemented in the Python version.")
-        _print_warn("Use vibegen.ps1 for repair mode with full features.")
+        _print_step("Repair mode is planned for a future release.")
+        _print_warn("For now, generate new projects with 'vibegen create <spec>'")
         return 1
 
     spec_path = Path(args.spec_file)

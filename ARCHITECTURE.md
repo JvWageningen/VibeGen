@@ -2,262 +2,341 @@
 
 ## Overview
 
-VibeGen is a Windows PowerShell automation layer that orchestrates Claude Code to
-generate complete, production-quality Python projects from a plain-English spec file,
-or to repair and improve existing Python repositories.
+VibeGen is a Python CLI tool that generates complete, production-quality Python projects from a plain-English specification using LLM providers (Claude or Ollama).
 
-It works by running `claude -p` (non-interactive pipeline mode) with carefully
-constructed prompts, with algorithmic pre-processing done in PowerShell to minimize
-the number of Claude turns and API calls required.
-
-```
-spec.md  -->  vibegen.ps1  -->  claude -p  -->  Generated project
-                 |                                      |
-                 |  (algorithmic pre-processing)        |
-                 |  ruff, mypy, bandit, radon,          |
-                 |  vulture, pip-audit                  |
-                 |                                      |
-                 +--------------------------------------+
-                           .claude/commands/
-                           settings.local.json
-```
-
----
-
-## Files
-
-| File | Purpose |
-|------|---------|
-| `vibegen.ps1` | Main entry point — generate and repair modes |
-| `setup-vibegen.ps1` | One-time installer: installs dependencies, PATH, templates |
-| `spec.example.md` | Annotated example spec file (weather alerter) |
-| `.claude/commands/` | 43 slash command templates installed into generated projects |
-| `.claude/settings.local.json` | Claude Code permission rules copied to generated projects |
-
----
-
-## vibegen.ps1 — Generate Mode
-
-Triggered by: `vibegen spec.md`
-
-The spec file is parsed algorithmically in PowerShell before Claude is invoked.
-Extracted fields:
-
-| Spec section | Variable | Used for |
-|---|---|---|
-| `## Name` | `$projectName`, `$packageName` | Directory name, Python package name |
-| `## Python Version` | `$pythonVersion` | `uv init --python` |
-| `## Dependencies` | `$dependencies` | `uv add` |
-| `## Usage/Examples/CLI/API` | `$usageSection` | README generation |
-| `<!-- docs/... -->` comments | `$docFiles` | Reference docs passed to Claude |
-
-### Steps
+It works by orchestrating:
+- **Spec parsing** — Extract project metadata from Markdown
+- **Project scaffolding** — Initialize uv project with git and dependencies
+- **LLM-driven generation** — Call Claude API or Ollama to write source code and tests
+- **Iterative fixing** — Run tests, parse failures, re-prompt for fixes
+- **Quality validation** — Format with ruff, type-check with mypy, check security with bandit
 
 ```
-Step 1   uv init + uv add (deps + dev-deps)
-Step 2   git init, .gitignore, .gitattributes
-Step 3   Copy reference documentation files
-Step 4   Generate CLAUDE.md (from spec data, no Claude call)
-Step 5   Generate .vscode/settings.json (hardcoded template)
-Step 6   Install .claude/commands/ + settings.local.json
-Step 7   Append tool config to pyproject.toml (ruff/pytest/mypy/bandit/vulture)
-Step 8   Generate .pre-commit-config.yaml + install hooks
-         ---- checkpoint commit ----
-Step 9   Claude: generate source code in src/<package>/
-         -> ruff auto-fix run natively after Claude returns
-Step 10  Claude: generate test suite in tests/
-Step 11  Fix loop (up to MaxFixAttempts):
-           - ruff auto-fix -> re-run pytest -> if pass: done (no Claude call)
-           - else: Claude fixes with trimmed failure output
-Step 12  Final quality checks (all non-blocking, reported as warnings):
-           ruff, mypy, bandit, pip-audit, radon cc, vulture
-Step 13  README.md generated from spec data (no Claude call)
-```
-
-### Claude calls in generate mode
-
-| Step | Claude call | Can be skipped? |
-|------|-------------|-----------------|
-| 9 | Source code generation | Never |
-| 10 | Test suite generation | Never |
-| 11 | Test fix (per attempt) | Yes — if ruff auto-fix resolves failures |
-
----
-
-## vibegen.ps1 — Repair Mode
-
-Triggered by: `vibegen -Repair [-RepoPath <path>]`
-
-Improves an existing Python project in three phases, with algorithmic pre-processing
-before each Claude call so Claude starts with the full diagnostic picture.
-
-```
-Phase 1/3 — Structure
-  Pre-run: ruff --fix, ruff check (remaining), radon cc -mi C, vulture
-  Claude: fixes type hints, docstrings, complexity, dead code
-
-Phase 2/3 — Tests
-  Claude: reads source, adds missing tests and coverage
-
-Fix loop (up to MaxFixAttempts):
-  ruff auto-fix -> re-run pytest -> Claude if still failing
-
-Phase 3/3 — Final quality
-  Pre-run: ruff check, mypy, bandit, pip-audit
-  Claude: fixes type errors, security issues, upgrades vulnerable deps
-  Native ruff run after Claude returns
+spec.md  →  vibegen create  →  LLM (Claude/Ollama)  →  Generated project
+                |                      |
+                |  (spec parsing)      |  (planning + code gen)
+                |  project init        |  (test generation)
+                |  template setup      |  (test fixing loop)
+                |                      |
+                +────────────────────────┐
+                                         v
+                              .venv/ + src/ + tests/
+                              pyproject.toml configured
+                              git history recorded
 ```
 
 ---
 
-## Algorithmic Pre-processing (key design decision)
+## Directory Structure
 
-Rather than asking Claude to discover issues by running tools, VibeGen runs the
-tools first in PowerShell and injects the output into Claude's prompt. This means:
-
-- Claude reads only files that have reported issues (not all files blindly)
-- No tool-discovery turns are spent — Claude goes straight to fixing
-- ruff auto-fix runs before every Claude fix call; if it resolves all failures,
-  the Claude call is skipped entirely
-- pytest output is trimmed to failure-relevant lines only before being sent
-
-Tools run natively before prompting Claude:
-
-| Tool | When | Injected into prompt? |
-|------|------|-----------------------|
-| ruff --fix | Before every Claude call | No (applied, then residual injected) |
-| ruff check | Repair Phase 1 and 3 | Yes — remaining violations |
-| mypy | Repair Phase 3 | Yes — all type errors |
-| bandit | Repair Phase 3 | Yes — Medium/High findings only |
-| pip-audit | Repair Phase 3 | Yes — if CVEs found |
-| radon cc | Repair Phase 1 | Yes — grade C+ functions (CC >= 11) |
-| vulture | Repair Phase 1 | Yes — >= 80% confidence unused code |
-
----
-
-## Install-ClaudeFiles Helper
-
-Called in both generate and repair modes. Copies from `~/.vibegen/` into the
-target project's `.claude/` directory:
-
-- All `commands/**/*.md` files (preserving category subdirectory structure)
-- `settings.local.json` (Claude Code permission rules)
-- Substitutes `{{PACKAGE_NAME}}` in `feature/new-module.md`
-
-Source of truth: `.claude/commands/` in this repo → `setup-vibegen.ps1` copies
-to `~/.vibegen/commands/` at install time → `Install-ClaudeFiles` copies from
-there to each generated project.
-
----
-
-## Slash Commands — Category Structure
-
-43 command files, callable as `/category:command` in Claude Code.
+### Core CLI
 
 ```
-analysis/    (10)  debug, explain, find, impact, map, map-repo, search, trace, where, why
-docs/         (6)  adr, changelog, doc, doc-repo, env, index
-feature/      (7)  add, extend, implement, integrate, new-module, plan, scaffold
-quality/     (16)  cleanup, dedupe, deps, fix, migrate, profile, refactor, refactor-module,
-                   refactor-repo, rename, review, security, ship, simplify, standardize, type-fix
-test/         (4)  coverage, edge, generate, reproduce
+src/vibegen/
+├── __init__.py              Entry point
+├── __main__.py              Script entry point
+├── cli.py                   Main CLI logic (generate, create subcommands)
+├── ollama_client.py         Ollama HTTP API wrapper
+└── prompts/                 LLM prompt templates
+    ├── system.txt           System prompt (context for LLM)
+    ├── plan.txt             Planning phase prompt
+    ├── generate_code.txt    Source code generation prompt
+    ├── write_tests.txt      Test generation prompt
+    └── fix_tests.txt        Test fixing prompt
 ```
 
-All commands follow the "batch diagnostics first" pattern:
-- Run tools upfront in one step to get the full picture
-- Apply auto-fixes before reading files
-- Read only files with reported issues
-
----
-
-## Generated Project Structure
+### Generated Projects
 
 ```
 <project-name>/
-+-- .claude/
-|   +-- commands/          <- 43 slash commands (5 categories)
-|   +-- settings.local.json
-+-- .vscode/
-|   +-- settings.json      <- Format-on-save, Ruff, Pylance strict
-+-- .pre-commit-config.yaml <- ruff + bandit + vulture hooks
-+-- CLAUDE.md              <- Project context (tech stack, commands, style rules)
-+-- README.md              <- Generated from spec data
-+-- pyproject.toml         <- ruff + pytest + mypy + bandit + vulture config
-+-- src/<package>/
-|   +-- __init__.py + modules
-+-- tests/
-    +-- conftest.py
-    +-- test_*.py
+├── .venv/                   Virtual environment (uv-managed)
+├── .vscode/
+│   └── settings.json        Format-on-save, Ruff, Pylance strict
+├── .pre-commit-config.yaml  Auto-runs ruff on commit
+├── .gitignore + .gitattributes
+├── CLAUDE.md                Project context for Claude Code (auto-generated)
+├── README.md                Documentation (auto-generated from spec)
+├── pyproject.toml           Dependencies + ruff/pytest/mypy config
+├── uv.lock                  Locked dependencies
+├── src/<package>/
+│   ├── __init__.py
+│   └── *.py                 Auto-generated modules
+└── tests/
+    ├── conftest.py
+    └── test_*.py            Auto-generated tests
 ```
-
-### Dev dependencies installed in every generated project
-
-`pytest`, `pytest-cov`, `ruff`, `mypy`, `pre-commit`, `bandit`, `pip-audit`,
-`radon`, `vulture`
 
 ---
 
-## settings.local.json — Permission Model
+## Generation Pipeline
 
-Copied into every generated project. Defines Claude Code tool permissions:
+Triggered by: `vibegen create spec.md`
 
-- **Allow**: `Bash(*)` — all bash commands permitted by default
-- **Ask**: destructive or risky operations (rm, mv, git reset/clean/checkout, pip install, docker)
-- **Deny**: catastrophic operations (rm -rf /, sudo, shutdown, dd, mkfs)
+### Phase 1: Initialization (no LLM calls)
+
+```
+Step 1   Parse spec.md
+         Extract: project name, package name, description, modules list
+         
+Step 2   uv init <package-name>
+         Create virtual environment + pyproject.toml
+         
+Step 3   uv add <dependencies>
+         Install base dependencies from spec
+         
+Step 4   git init
+         Create .gitattributes, .gitignore
+         Commit: "Initial scaffold"
+         
+Step 5   Setup .vscode/settings.json
+         Configure Ruff, Pylance, format-on-save
+         
+Step 6   Generate CLAUDE.md
+         Project context from spec (auto-generated, no LLM)
+         
+Step 7   Configure pyproject.toml
+         Add ruff, pytest, mypy, bandit configuration
+         
+Step 8   Setup pre-commit hooks
+         Install .pre-commit-config.yaml
+         Commit: "Configuration complete"
+```
+
+### Phase 2: LLM-Driven Code Generation
+
+#### Sub-phase 2a: Planning
+
+```
+Step 9   Planning prompt to LLM
+         "Here's the spec. Plan the module structure:"
+         LLM response: Architecture overview
+         
+         Commit: "Planning phase"
+```
+
+#### Sub-phase 2b: Source Code Generation
+
+```
+Step 10  Code generation prompt to LLM
+         "Generate the source modules according to the plan"
+         LLM response: Markdown with ```python code blocks
+         
+         Parse: Extract file:path and code blocks
+         Write: Generate src/<package>/*.py files
+         Format: ruff check --fix (auto-format)
+         
+         Commit: "Generated source code"
+```
+
+#### Sub-phase 2c: Test Generation
+
+```
+Step 11  Test generation prompt to LLM
+         "Generate pytest tests for each module"
+         LLM response: tests/*.py with test functions
+         
+         Parse: Extract test modules
+         Write: Generate tests/test_*.py
+         Format: ruff auto-fix
+         
+         Commit: "Generated tests"
+```
+
+### Phase 3: Iterative Test Fixing (up to max attempts)
+
+```
+Step 12  Run pytest
+         Get failure output
+         
+         If all pass: Proceed to Step 14
+         
+         If failures exist and attempts remain:
+           Step 12a  ruff --fix (auto-fix formatting/lint)
+           Step 12b  Re-run pytest
+           
+           If still failing:
+             Step 12c  Trim pytest output to relevant lines
+             Step 12d  Send fix prompt to LLM with failures
+             Step 12e  Parse LLM response, update test files
+             Step 12f  ruff --fix again
+             Step 12g  Commit: "Fix attempt N"
+             Step 12h  Loop to Step 12 (max attempts configurable)
+```
+
+### Phase 4: Quality Checks (non-blocking, warnings only)
+
+```
+Step 13  Run diagnostic tools
+         - ruff check       (lint)
+         - mypy             (type checking)
+         - bandit           (security)
+         - radon cc         (complexity)
+         
+         Generate report (don't fail on warnings)
+         Commit: "Quality checks complete"
+```
+
+### Phase 5: README Generation (no LLM call)
+
+```
+Step 14  Generate README.md from spec + generated structure
+         Include: overview, installation, usage examples, dev guide
+         
+         Commit: "Documentation"
+```
+
+### Phase 6: Final Status
+
+```
+Step 15  Print summary
+         - Project location
+         - Modules created
+         - Tests created
+         - Pass/fail status
+         - Quality warnings (if any)
+         - Next steps (code ., test, etc.)
+```
 
 ---
 
-## Data Flow
+## LLM Integration
+
+### Supported Providers
+
+| Provider | Model | Setup |
+|----------|-------|-------|
+| Claude | `claude-sonnet-4-5-20250929` | `export ANTHROPIC_API_KEY="..."` |
+| Ollama | `qwen2.5-coder:14b` | Run `ollama serve`, then pull model |
+
+### API Calls
+
+Three HTTP/CLI paths to invoke LLM:
+
+1. **Claude API** — Direct HTTPS to Anthropic
+2. **Ollama HTTP** — Local HTTP endpoint (default: http://localhost:11434)
+3. **Claude CLI** — Shell subprocess (fallback, less preferred)
+
+Code path: `_run_llm(prompt, model, provider)` in `cli.py`
+
+### Prompt Templates
+
+Located in `src/vibegen/prompts/`:
+
+| File | Purpose | LLM Input |
+|------|---------|-----------|
+| `system.txt` | System context | Loaded into every call |
+| `plan.txt` | Architecture planning | Loaded with spec + context |
+| `generate_code.txt` | Source code generation | Spec + module list |
+| `write_tests.txt` | Test generation | Generated code + spec |
+| `fix_tests.txt` | Test failure fixing | Failure output + code |
+
+All templates use `{...}` placeholders for dynamic substitution.
+
+### File Format Parsing
+
+**Input**: LLM response with Markdown code blocks
 
 ```
-spec.md
-  |
-  v
-vibegen.ps1 (PowerShell)
-  |  parse: name, python version, deps, usage section, doc refs
-  |
-  +-> uv init + uv add          (Step 1 — scaffold)
-  +-> git init                   (Step 2)
-  +-> CLAUDE.md                  (Step 4 — template, no Claude)
-  +-> .vscode/settings.json      (Step 5 — template, no Claude)
-  +-> .claude/ files             (Step 6 — copied from ~/.vibegen/)
-  +-> pyproject.toml config      (Step 7 — appended, no Claude)
-  +-> pre-commit config          (Step 8 — template, no Claude)
-  |
-  +-> claude -p "$codePrompt"    (Step 9 — source generation)
-  |     +-> ruff --fix (native)
-  |
-  +-> claude -p "$testPrompt"    (Step 10 — test generation)
-  |
-  +-> Fix loop x MaxFixAttempts  (Step 11)
-  |     +-> ruff --fix + pytest
-  |     +-> [if still failing] claude -p "$fixPrompt"
-  |
-  +-> ruff + mypy + bandit + pip-audit + radon + vulture (Step 12 — report)
-  |
-  +-> README.md                  (Step 13 — from spec data, no Claude)
+Some explanation...
+--- file: src/package/module.py ---
+
+```python
+def my_func():
+    pass
 ```
+
+More explanation...
+```
+
+**Output**: Parsed into `Dict[str, str]` keyed by filepath
+
+**Parser logic** in `_parse_generated_files()`:
+- Look for `--- file: <path> ---` delimiters
+- Extract code between ``` fences
+- Stop parsing at closing fence (ignore narrative after)
+- Clean markdown formatting
 
 ---
 
 ## Key Design Decisions
 
-**Copy vs hardcode commands**: Command files live as `.md` files in the repo
-and are copied at install/generate time. Hardcoding them in `vibegen.ps1` would
-duplicate ~700 lines across generate and repair modes with no single source of truth.
+### 1. Template-based prompts
 
-**Algorithmic pre-processing**: Running ruff, mypy, bandit, radon, and vulture
-before Claude calls eliminates tool-discovery turns. Claude receives the output
-directly and can immediately read affected files and apply fixes.
+Prompts are Markdown files stored in the package, not hardcoded in Python. This allows:
+- Easy iteration on prompt wording without code changes
+- Same prompts reusable across CLI and VS Code
+- Clear separation of LLM logic from project logic
 
-**ruff before fix loop iterations**: Running `ruff --fix` before each Claude
-fix attempt means some failures that are pure lint/formatting issues get resolved
-without spending a Claude call.
+### 2. Delimiter-based file parsing
 
-**README without Claude**: The spec already contains project name, description,
-Python version, and a usage section. Generating README from this data saves one
-full Claude call per project without reducing documentation quality.
+Use `--- file: path ---` instead of JSON or structured output because:
+- Works across multiple LLM models (Claude and Ollama)
+- Handles narrative text gracefully (stop at closing ```)
+- Natural to read in Markdown responses
 
-**Permission model via settings.local.json**: Rather than passing permission
-flags on every `claude -p` invocation, the project-level `settings.local.json`
-encodes a safe default policy that also applies to manual Claude Code sessions in VS Code.
+### 3. Iterative test fixing with ruff pre-pass
+
+Run `ruff --fix` before each Claude fix attempt because:
+- Many test failures are pure formatting issues
+- Auto-fix resolves them without spending an LLM call
+- Reduces API usage
+
+### 4. No "repair mode" in Python version
+
+The initial Python version generates new projects only. Repair/improvement of existing
+projects can be done manually with Claude Code in VS Code, or added later if needed.
+
+### 5. LLM provider abstraction
+
+Support both Claude and Ollama through the same interface (`_run_llm`):
+- Users can switch providers per-run with `--provider` flag
+- Ollama allows offline iteration (qwen2.5-coder is fast locally)
+- Claude for production quality
+
+---
+
+## Dependencies
+
+### Core Dependencies
+
+- `requests` — HTTP client for Ollama API
+
+### Dev Dependencies
+
+- `ruff` — Linting and formatting (installed in every generated project)
+- `pytest` — Test framework (installed in every generated project)
+- `pytest-cov` — Code coverage (installed in every generated project)
+- `mypy` — Type checking (installed in every generated project)
+- `radon` — Complexity metrics (installed in every generated project)
+- `bandit` — Security checking (optional in generated projects)
+
+---
+
+## Testing & Development
+
+### Run Tests
+
+```bash
+uv run pytest
+```
+
+### Format & Lint
+
+```bash
+uv run ruff check . --fix
+uv run ruff format .
+```
+
+### Type Check
+
+```bash
+uv run mypy src/
+```
+
+### Generate Test Project
+
+```bash
+vibegen create test-projects/spec-example-word-counter.md
+cd word-counter
+uv run pytest
+```
