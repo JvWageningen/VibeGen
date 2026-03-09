@@ -1,0 +1,25 @@
+TASK
+Your job is to write pytest test cases covering the module described below.
+
+MODULE
+{{module_path}}
+
+SPECIFICATION
+{{spec}}
+
+CONSTRAINTS
+{{constraints}}
+
+OUTPUT FORMAT
+Return one or more file blocks in the following format:
+
+--- file: <path> ---
+<file contents>
+
+Separate multiple files using the same delimiter. Paths should be relative to the repo root.
+
+Example:
+--- file: tests/test_<module>.py ---
+# pytest code here
+
+Do NOT wrap the output in markdown fences or add any extra text.

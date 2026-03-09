@@ -120,6 +120,27 @@ if (Test-Path $srcScript) {
     exit 1
 }
 
+# Copy prompts/ directory (vibegen.ps1 reads prompts relative to $ScriptRoot)
+$promptsSrc  = Join-Path $scriptDir "prompts"
+$promptsDest = Join-Path $installDir "prompts"
+if (Test-Path $promptsSrc) {
+    if (Test-Path $promptsDest) { Remove-Item $promptsDest -Recurse -Force }
+    Copy-Item $promptsSrc $promptsDest -Recurse -Force
+    $promptCount = (Get-ChildItem $promptsDest -Filter "*.txt").Count
+    Write-Ok "Copied $promptCount prompt templates to $promptsDest"
+} else {
+    Write-Warn "prompts/ directory not found in $scriptDir"
+}
+
+# Copy scripts/ directory (ollama_client.py, etc.)
+$scriptsSrc  = Join-Path $scriptDir "scripts"
+$scriptsDest = Join-Path $installDir "scripts"
+if (Test-Path $scriptsSrc) {
+    if (Test-Path $scriptsDest) { Remove-Item $scriptsDest -Recurse -Force }
+    Copy-Item $scriptsSrc $scriptsDest -Recurse -Force
+    Write-Ok "Copied helper scripts to $scriptsDest"
+}
+
 # Create a launcher batch file so "vibegen" works from CMD/PowerShell
 $launcherPath = Join-Path $installDir "vibegen.cmd"
 @"

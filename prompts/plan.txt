@@ -1,0 +1,30 @@
+TASK
+You are a Python software architect. Create a detailed implementation plan for the project described below.
+Do NOT write any code. Return only the plan text.
+
+SPECIFICATION
+{{spec}}
+
+PROJECT SCAFFOLD
+{{repo_tree}}
+
+CONSTRAINTS
+{{constraints}}
+
+OUTPUT FORMAT
+Return a plain-text implementation plan with these sections:
+
+## Modules
+List each Python file to create under src/{{package}}/ with a one-line purpose description.
+
+## Public API
+For each module, list the key functions and classes with their signatures (Python type-annotated).
+
+## Pydantic Models
+List any Pydantic BaseModel classes needed: class name, fields (name: type), and purpose.
+
+## Module Dependencies
+List intra-package imports (which modules import from which within src/{{package}}/).
+
+## Test Plan
+For each module, list 3-5 key test cases to cover (function name + what it tests).

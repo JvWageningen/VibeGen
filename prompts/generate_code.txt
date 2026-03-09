@@ -1,0 +1,55 @@
+TASK
+Your job is to implement the requested Python module(s) from the specification.
+
+IMPLEMENTATION PLAN
+{{plan}}
+
+SPECIFICATION
+{{spec}}
+
+REPO STRUCTURE
+{{repo_tree}}
+
+CONSTRAINTS
+{{constraints}}
+
+TESTS
+- Write pytest unit tests in a `tests/` directory.
+- Cover edge cases described in the spec.
+- IMPORTANT: Tests must import using the installed package name only.
+  Correct:   from {{package}}.module import SomeClass
+  WRONG:     from src.{{package}}.module import SomeClass  <-- never use src. prefix
+
+OUTPUT FORMAT
+Return one or more file blocks in the following format:
+
+--- file: <path> ---
+<file contents>
+
+Separate multiple files using the same delimiter.
+
+FILE LOCATION GUIDELINES
+- Place all library code under `src/{{package}}/` (e.g. `src/{{package}}/main.py`).
+- Place tests under a `tests/` directory (e.g. `tests/test_main.py`).
+- Paths should always be relative to the repo root.
+
+DO NOT WRITE THESE FILES — they already exist and must not be overwritten:
+- pyproject.toml
+- README.md
+- .vscode/settings.json
+- .gitignore
+- .gitattributes
+- .pre-commit-config.yaml
+- CLAUDE.md
+- Any other .toml, .yaml, .json, or .md config/docs files
+
+Only write Python source files under src/ and test files under tests/.
+
+Example:
+--- file: src/{{package}}/__init__.py ---
+# __init__.py content here
+
+--- file: src/{{package}}/main.py ---
+# main.py content here
+
+Do NOT wrap the output in markdown fences or add any extra text.
