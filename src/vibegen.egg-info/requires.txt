@@ -1,0 +1,9 @@
+requests>=2.0
+
+[dev]
+ruff
+pytest
+pytest-cov
+mypy
+radon
+requests

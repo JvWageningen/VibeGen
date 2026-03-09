@@ -1,0 +1,33 @@
+TASK
+Tests are failing. Analyze the pytest output and inspect the source code for the failing module.
+
+ERROR LOG
+{{error_log}}
+
+PROJECT STRUCTURE
+{{repo_tree}}
+
+DEPENDENCY GRAPH
+{{dep_graph}}
+
+SOURCE CONTEXT
+{{source}}
+
+GOAL
+Fix the bug(s) so that the tests pass.
+
+CONSTRAINTS
+- Don't weaken assertions.
+- Keep change minimal and consistent with the project style.
+- IMPORTANT: Tests must use the installed package name in imports (no src. prefix).
+  Correct:   from word_counter.module import SomeClass
+  WRONG:     from src.word_counter.module import SomeClass
+
+OUTPUT FORMAT
+Return the fixed files as file blocks in the following format:
+
+--- file: <path> ---
+<file contents>
+
+Separate multiple files using the same delimiter. Paths should be relative to the repo root.
+Do NOT wrap the output in markdown fences or add any extra text outside the file blocks.

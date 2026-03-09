@@ -1,0 +1,32 @@
+TASK
+You are a Python expert. Fix the linting errors listed below in the given source file.
+Do NOT change any logic or add features — only fix the listed errors.
+
+FILE PATH
+{{file_path}}
+
+INSTALLED DEPENDENCIES (the only packages available in this project)
+{{installed_deps}}
+
+ERRORS TO FIX
+{{errors}}
+
+CURRENT FILE CONTENT
+{{file_content}}
+
+FIX GUIDELINES
+- F821 (undefined name): add the missing import, OR replace the undefined name with
+  the correct equivalent from INSTALLED DEPENDENCIES.
+  IMPORTANT: never import a package that is not in INSTALLED DEPENDENCIES.
+  If a function uses a package not listed there, replace it with stdlib or already-
+  imported alternatives (e.g. replace `typer.echo(msg)` with `print(msg)`,
+  replace `typer.Exit(code=1)` with `sys.exit(1)`, etc.).
+- B904 (raise in except without from): change `raise X` to `raise X from err`
+  (or `raise X from None` if the original exception is irrelevant).
+- E501 (line too long): break the line at a logical boundary.
+- SIM/B/N rules: apply the suggested simplification or rename.
+- Preserve all existing logic, docstrings, and type hints exactly.
+
+OUTPUT FORMAT
+Return ONLY the complete fixed file content — no markdown fences, no --- file: ---
+wrapper, no explanations. Just the raw Python source code.

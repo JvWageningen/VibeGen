@@ -908,15 +908,9 @@ def _format_code(project_path: Path) -> bool:
         _run_cmd(
             ["uv", "run", "ruff", "check", ".", "--fix"],
             cwd=project_path,
-            capture_output=True,
             check=False,
         )
-        _run_cmd(
-            ["uv", "run", "ruff", "format", "."],
-            cwd=project_path,
-            capture_output=True,
-            check=False,
-        )
+        _run_cmd(["uv", "run", "ruff", "format", "."], cwd=project_path, check=False)
         return True
     except Exception as e:
         _print_warn(f"Could not run ruff: {e}")

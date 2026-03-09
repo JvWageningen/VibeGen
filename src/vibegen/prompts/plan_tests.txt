@@ -1,0 +1,46 @@
+TASK
+You are a Python test architect. Analyse the actual source code below and produce a
+detailed test plan. Do NOT write any code. Return only the plan text.
+
+SPECIFICATION
+{{spec}}
+
+INSTALLED DEPENDENCIES
+{{installed_deps}}
+
+SOURCE FILES
+{{source_files}}
+
+DEPENDENCY GRAPH
+{{dependency_graph}}
+
+CONSTRAINTS
+{{constraints}}
+
+OUTPUT FORMAT
+Return a plain-text test plan with these sections:
+
+## Test Strategy
+Brief overview of the testing approach (mocking strategy, fixture needs, etc.).
+
+## Test Files
+List each test file to create under tests/ with a one-line purpose.
+
+## Test Cases Per Module
+For each module, list the test cases:
+  - function/class being tested
+  - scenario
+  - key assertion(s)
+  - fixtures or mocks needed
+
+## Correct Import Statements
+List the exact import lines tests should use. Use ONLY packages from INSTALLED DEPENDENCIES.
+Example:
+  from {{package}}.processor import count_words
+  import pytest
+
+## conftest.py Fixtures
+List shared fixtures needed (name, type returned, purpose).
+
+## Notes
+Any important details: mock points, test-data requirements, known edge cases.
