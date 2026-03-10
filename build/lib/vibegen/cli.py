@@ -9,18 +9,21 @@ from pathlib import Path
 from ._analysis import _parse_spec
 from ._io import _print_err, _print_ok, _print_step, _print_warn, _run_cmd
 from ._pipeline import _generate_and_fix_tests, _generate_code
+from ._plan import build_default_plan
 from ._scaffold import (
     _copy_docs,
     _create_vscode_settings,
     _ensure_package_dir,
     _generate_readme,
     _init_git,
+    _repair_project,
     _update_pyproject_tools,
     _write_claude_md,
     _write_gitattributes,
     _write_gitignore,
     _write_pre_commit_config,
 )
+from ._session import Session, hash_spec, save_session, spec_changed
 from .sandbox import SandboxConfig, ensure_image_ready
 
 
@@ -41,7 +44,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--repair", action="store_true", help="Repair an existing project"
     )
-    parser.add_argument("--repo-path", default="", help="Path to repo to repair")
+    parser.add_argument(
+        "--repo-path",
+        default="",
+        help="Path to repo to repair (defaults to current directory)",
+    )
     parser.add_argument(
         "--max-fix-attempts", type=int, default=3, help="Max test fix iterations"
     )
@@ -68,6 +75,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Run project commands inside a Docker container (filesystem isolation)",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume a previous run: skip scaffold/generate if spec is unchanged",
+    )
 
     args = parser.parse_args(argv)
 
@@ -76,9 +88,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.repair:
-        _print_step("Repair mode is planned for a future release.")
-        _print_warn("For now, generate new projects with 'vibegen create <spec>'")
-        return 1
+        repo_path = Path(args.repo_path) if args.repo_path else Path.cwd()
+        return _repair_project(repo_path)
 
     spec_path = Path(args.spec_file)
     if not spec_path.exists():
@@ -96,53 +107,91 @@ def main(argv: list[str] | None = None) -> int:
         Path(args.output_dir) if args.output_dir else spec_path.parent / project_name
     )
 
+    task_plan = build_default_plan()
+
     sandbox: SandboxConfig | None = None
     if args.sandbox:
         sandbox = SandboxConfig(project_path=output_dir)
         ensure_image_ready(sandbox.image)
         _print_step(f"Sandbox enabled (image: {sandbox.image})")
 
-    _print_step("Scaffolding project with uv...")
-    if output_dir.exists() and any(output_dir.iterdir()):
-        _print_warn(
-            "Output directory already exists and is not empty. Proceeding anyway."
-        )
+    task_plan.start("parse_spec")
+    task_plan.complete("parse_spec", project_name)
+
+    # ------------------------------------------------------------------
+    # Resume logic: skip scaffold + generate when spec is unchanged
+    # ------------------------------------------------------------------
+    resuming = args.resume and not spec_changed(output_dir, spec_path)
+    if args.resume and not resuming:
+        _print_warn("Spec has changed since the last run — starting fresh.")
+
+    session = Session(
+        spec_hash=hash_spec(spec_path),
+        project_name=project_name,
+        package_name=package_name,
+        model_provider=args.model_provider,
+        model=args.model,
+    )
+
+    if resuming:
+        task_plan.skip("scaffold", "resuming previous run")
+        task_plan.skip("install_deps", "resuming previous run")
+        _print_step("Resuming previous run — skipping scaffold.")
     else:
-        output_dir.mkdir(parents=True, exist_ok=True)
+        task_plan.start("scaffold")
+        _print_step("Scaffolding project with uv...")
+        if output_dir.exists() and any(output_dir.iterdir()):
+            _print_warn(
+                "Output directory already exists and is not empty. Proceeding anyway."
+            )
+        else:
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            _run_cmd(
+                ["uv", "init", str(output_dir), "--lib", "--python",
+                 spec["python_version"]]
+            )
+        except subprocess.CalledProcessError as e:
+            _print_err(f"Failed to scaffold project: {e}")
+            task_plan.fail("scaffold", str(e))
+            return 1
+
+        _ensure_package_dir(output_dir, package_name)
+        _write_claude_md(output_dir, spec)
+        _create_vscode_settings(output_dir)
+        _write_gitignore(output_dir)
+        _write_gitattributes(output_dir)
+        _write_pre_commit_config(output_dir)
+        _update_pyproject_tools(output_dir)
+        _copy_docs(output_dir, spec_path, spec["doc_files"])
+        _init_git(output_dir)
+        _generate_readme(output_dir, spec, package_name)
+
+        try:
+            _run_cmd(["git", "add", "-A"], cwd=output_dir, check=False)
+            _run_cmd(
+                ["git", "commit", "-q", "-m", "chore: initial scaffold from vibegen"],
+                cwd=output_dir,
+                check=False,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+        task_plan.complete("scaffold")
+        _print_ok("Project scaffold created")
+        save_session(output_dir, session)
 
     try:
-        _run_cmd(
-            ["uv", "init", str(output_dir), "--lib", "--python", spec["python_version"]]
-        )
-    except subprocess.CalledProcessError as e:
-        _print_err(f"Failed to scaffold project: {e}")
-        return 1
+        task_plan.start("install_deps")
+        task_plan.complete("install_deps")
 
-    _ensure_package_dir(output_dir, package_name)
-    _write_claude_md(output_dir, spec)
-    _create_vscode_settings(output_dir)
-    _write_gitignore(output_dir)
-    _write_gitattributes(output_dir)
-    _write_pre_commit_config(output_dir)
-    _update_pyproject_tools(output_dir)
-    _copy_docs(output_dir, spec_path, spec["doc_files"])
-    _init_git(output_dir)
-    _generate_readme(output_dir, spec, package_name)
+        if resuming:
+            for step_id in ("plan_code", "generate_code", "fix_code_ruff",
+                            "fix_code_llm"):
+                task_plan.skip(step_id, "resuming previous run")
 
-    try:
-        _run_cmd(["git", "add", "-A"], cwd=output_dir, check=False)
-        _run_cmd(
-            ["git", "commit", "-q", "-m", "chore: initial scaffold from vibegen"],
-            cwd=output_dir,
-            check=False,
-        )
-    except Exception:  # noqa: BLE001
-        pass
-
-    _print_ok("Project scaffold created")
-
-    try:
-        code_generated = _generate_code(
+        code_generated = resuming or _generate_code(
             output_dir,
             spec,
             package_name,
@@ -150,6 +199,7 @@ def main(argv: list[str] | None = None) -> int:
             args.model,
             show_output=args.show_output,
             sandbox=sandbox,
+            plan=task_plan,
         )
 
         if code_generated:
@@ -162,7 +212,10 @@ def main(argv: list[str] | None = None) -> int:
                 max_fix_attempts=args.max_fix_attempts,
                 show_output=args.show_output,
                 sandbox=sandbox,
+                plan=task_plan,
             )
+
+            task_plan.start("finalize")
             _generate_readme(output_dir, spec, package_name)
             try:
                 _run_cmd(["git", "add", "-A"], cwd=output_dir, check=False)
@@ -179,7 +232,11 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except Exception:  # noqa: BLE001
                 pass
+            task_plan.complete("finalize")
+            session.last_status = "complete"
+            save_session(output_dir, session)
 
+            print("\n" + task_plan.render())
             _print_ok("Project generation complete!")
             _print_ok(f"Location: {output_dir}")
         else:
@@ -234,5 +291,7 @@ from ._pipeline import (  # noqa: E402, F401
     _run_tests,
 )
 from ._scaffold import (  # noqa: E402, F401
+    _detect_package_name,
     _ensure_directory,
+    _read_pyproject_info,
 )

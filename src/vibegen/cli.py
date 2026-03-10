@@ -10,19 +10,20 @@ from ._analysis import _parse_spec
 from ._io import _print_err, _print_ok, _print_step, _print_warn, _run_cmd
 from ._pipeline import _generate_and_fix_tests, _generate_code
 from ._plan import build_default_plan
-from ._session import Session, hash_spec, load_session, save_session, spec_changed
 from ._scaffold import (
     _copy_docs,
     _create_vscode_settings,
     _ensure_package_dir,
     _generate_readme,
     _init_git,
+    _repair_project,
     _update_pyproject_tools,
     _write_claude_md,
     _write_gitattributes,
     _write_gitignore,
     _write_pre_commit_config,
 )
+from ._session import Session, hash_spec, save_session, spec_changed
 from .sandbox import SandboxConfig, ensure_image_ready
 
 
@@ -43,7 +44,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--repair", action="store_true", help="Repair an existing project"
     )
-    parser.add_argument("--repo-path", default="", help="Path to repo to repair")
+    parser.add_argument(
+        "--repo-path",
+        default="",
+        help="Path to repo to repair (defaults to current directory)",
+    )
     parser.add_argument(
         "--max-fix-attempts", type=int, default=3, help="Max test fix iterations"
     )
@@ -83,9 +88,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.repair:
-        _print_step("Repair mode is planned for a future release.")
-        _print_warn("For now, generate new projects with 'vibegen create <spec>'")
-        return 1
+        repo_path = Path(args.repo_path) if args.repo_path else Path.cwd()
+        return _repair_project(repo_path)
 
     spec_path = Path(args.spec_file)
     if not spec_path.exists():
@@ -287,5 +291,7 @@ from ._pipeline import (  # noqa: E402, F401
     _run_tests,
 )
 from ._scaffold import (  # noqa: E402, F401
+    _detect_package_name,
     _ensure_directory,
+    _read_pyproject_info,
 )
