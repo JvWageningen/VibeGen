@@ -71,6 +71,36 @@ def _estimate_num_ctx(prompt: str, system_prompt: str = "") -> int:
     return min(ctx, 131072)  # 128k upper bound
 
 
+def _run_llm_role(
+    role: str,
+    prompt: str,
+    model_provider: str,
+    model: str,
+    show_output: bool = False,
+) -> str:
+    """Call the LLM with a role-specific system prompt loaded from a template file.
+
+    Loads ``prompts/role_<role>.txt`` as the system prompt, then delegates to
+    :func:`_run_llm`.  Falls back to the default ``system.txt`` when the role
+    template is missing.
+
+    Args:
+        role: Role name (e.g. ``"architect"``, ``"reviewer"``).
+        prompt: User prompt.
+        model_provider: ``"claude"`` or ``"ollama"``.
+        model: Model identifier string.
+        show_output: Print LLM output to stdout when True.
+
+    Returns:
+        Generated text from the LLM.
+    """
+    system_prompt = _load_prompt_template(f"role_{role}") or _load_prompt_template(
+        "system"
+    )
+    return _run_llm(prompt, model_provider, model, system_prompt=system_prompt,
+                    show_output=show_output)
+
+
 def _run_llm(
     prompt: str,
     model_provider: str,
