@@ -289,6 +289,39 @@ def _fix_code_errors_with_llm(
 
 
 # ---------------------------------------------------------------------------
+# Claude Code agent runner
+# ---------------------------------------------------------------------------
+
+
+def _run_claude_agent(
+    task: str,
+    project_path: Path,
+    skip_permissions: bool = True,
+) -> bool:
+    """Run Claude Code agent non-interactively for a focused task.
+
+    The agent reads and writes files directly using its own tools — no output
+    parsing is needed.  Output streams to the terminal so the user can see
+    progress in real-time.
+
+    Args:
+        task: Short task description passed as a positional CLI argument.
+        project_path: Working directory for the agent (the generated project).
+        skip_permissions: Pass ``--dangerously-skip-permissions`` when True.
+
+    Returns:
+        True if the agent exited with code 0.
+    """
+    cmd = ["claude", "--print"]
+    if skip_permissions:
+        cmd.append("--dangerously-skip-permissions")
+    cmd.append(task)
+
+    result = subprocess.run(cmd, cwd=project_path, check=False)
+    return result.returncode == 0
+
+
+# ---------------------------------------------------------------------------
 # Code generation pipeline
 # ---------------------------------------------------------------------------
 
@@ -302,8 +335,14 @@ def _generate_code(
     show_output: bool = False,
     sandbox: SandboxConfig | None = None,
     plan: TaskPlan | None = None,
+    skip_permissions: bool = True,
 ) -> bool:
-    """Generate source code with LLM, then auto-fix and LLM-fix remaining errors.
+    """Generate source code, then auto-fix and LLM-fix remaining errors.
+
+    When *model_provider* is ``"claude"``, the Claude Code agent is invoked
+    directly so it can write files, run ruff, and install packages itself —
+    no output parsing needed.  For other providers the prompt-based path is
+    used as a fallback.
 
     Args:
         project_path: Project root directory.
@@ -311,13 +350,55 @@ def _generate_code(
         package_name: Python package name (snake_case).
         model_provider: ``"claude"`` or ``"ollama"``.
         model: Model identifier.
-        show_output: Print LLM output when True.
+        show_output: Print LLM output when True (Ollama path only).
         sandbox: Optional Docker sandbox config.
         plan: Optional TaskPlan for progress tracking.
+        skip_permissions: Skip Claude permission prompts when True.
 
     Returns:
         True if source files were generated, False otherwise.
     """
+    if model_provider == "claude":
+        if plan:
+            plan.start("plan_code")
+            plan.complete("plan_code", "delegated to Claude agent")
+            plan.start("generate_code")
+
+        task = (
+            f"Generate Python source code for the '{package_name}' package.\n"
+            "1. Read spec.md for the full project requirements.\n"
+            "2. Read CLAUDE.md for coding conventions and constraints.\n"
+            f"3. Create all source files in src/{package_name}/\n"
+            "4. Use 'uv add <pkg>' for any missing packages.\n"
+            "5. When done run: uv run ruff check . --fix && uv run ruff format .\n"
+            "Do NOT generate tests — only source code."
+        )
+        _print_step("Generating source code with Claude agent...")
+        success = _run_claude_agent(task, project_path, skip_permissions)
+
+        if plan:
+            if success:
+                plan.complete("generate_code")
+                for step in ("fix_code_ruff", "fix_code_llm"):
+                    plan.complete(step, "handled by agent")
+            else:
+                plan.fail("generate_code", "agent returned non-zero exit code")
+
+        if success:
+            try:
+                _run_cmd(["git", "add", "-A"], cwd=project_path, check=False)
+                _run_cmd(
+                    ["git", "commit", "-q", "-m", "feat: generate source code from spec"],
+                    cwd=project_path,
+                    check=False,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        return success
+
+    # ------------------------------------------------------------------
+    # Ollama / other providers: prompt-based path (parse output → write)
+    # ------------------------------------------------------------------
     if plan:
         plan.start("plan_code")
 
@@ -347,12 +428,8 @@ def _generate_code(
 
     plan_prompt = _render_template(
         plan_template,
-        {
-            "spec": spec["raw"],
-            "repo_tree": repo_tree,
-            "constraints": constraints,
-            "package": package_name,
-        },
+        {"spec": spec["raw"], "repo_tree": repo_tree,
+         "constraints": constraints, "package": package_name},
     )
 
     _print_step("Planning with LLM...")
@@ -363,13 +440,8 @@ def _generate_code(
 
     code_prompt = _render_template(
         code_template,
-        {
-            "spec": spec["raw"],
-            "repo_tree": repo_tree,
-            "constraints": constraints,
-            "package": package_name,
-            "plan": plan_output,
-        },
+        {"spec": spec["raw"], "repo_tree": repo_tree, "constraints": constraints,
+         "package": package_name, "plan": plan_output},
     )
 
     if plan:
@@ -394,7 +466,6 @@ def _generate_code(
 
     src_dir = project_path / "src" / package_name
 
-    # Pass 1: auto-fix with ruff
     if plan:
         plan.start("fix_code_ruff")
     _print_step("Formatting generated code...")
@@ -402,31 +473,19 @@ def _generate_code(
     if plan:
         plan.complete("fix_code_ruff")
 
-    # Pass 2: LLM-fix non-auto-fixable ruff errors in src/
     if plan:
         plan.start("fix_code_llm")
+    installed_deps = _get_pyproject_deps(project_path)
     _fix_code_errors_with_llm(
-        project_path,
-        ["src/"],
-        installed_deps,
-        model_provider,
-        model,
-        show_output,
-        sandbox=sandbox,
+        project_path, ["src/"], installed_deps, model_provider, model,
+        show_output, sandbox=sandbox,
     )
     if plan:
         plan.complete("fix_code_llm")
 
-    # Pass 3: install missing packages (ruff can't detect these)
     installed_deps = _install_missing_deps(
-        project_path,
-        src_dir,
-        package_name,
-        installed_deps,
-        sandbox=sandbox,
+        project_path, src_dir, package_name, installed_deps, sandbox=sandbox,
     )
-
-    # Pass 4: re-format after all edits
     _format_code(project_path, sandbox=sandbox)
 
     try:
@@ -753,8 +812,14 @@ def _generate_and_fix_tests(
     show_output: bool = False,
     sandbox: SandboxConfig | None = None,
     plan: TaskPlan | None = None,
+    skip_permissions: bool = True,
 ) -> bool:
     """Plan tests from actual source, generate them, fix errors, then run pytest.
+
+    When *model_provider* is ``"claude"``, the Claude Code agent is invoked
+    directly so it can write tests, run pytest, and fix failures itself —
+    no output parsing needed.  For other providers the prompt-based path is
+    used as a fallback.
 
     Args:
         project_path: Project root directory.
@@ -763,13 +828,55 @@ def _generate_and_fix_tests(
         model_provider: ``"claude"`` or ``"ollama"``.
         model: Model identifier.
         max_fix_attempts: Number of test-fix retry cycles.
-        show_output: Print LLM output when True.
+        show_output: Print LLM output when True (Ollama path only).
         sandbox: Optional Docker sandbox config.
         plan: Optional TaskPlan for progress tracking.
+        skip_permissions: Skip Claude permission prompts when True.
 
     Returns:
         True (always; failures are reported via warnings).
     """
+    if model_provider == "claude":
+        if plan:
+            plan.start("plan_tests")
+            plan.complete("plan_tests", "delegated to Claude agent")
+            plan.start("generate_tests")
+
+        task = (
+            f"Generate pytest tests for the '{package_name}' package and fix all failures.\n"
+            f"1. Read the source code in src/{package_name}/\n"
+            "2. Create test files in tests/\n"
+            "3. Run: uv run pytest -x --tb=short\n"
+            f"4. Fix any failing tests and re-run. Repeat up to {max_fix_attempts} times.\n"
+            f"5. Use absolute imports: from {package_name}.module import ..., never from src/\n"
+            "6. Run: uv run ruff check --fix && uv run ruff format tests/ when done."
+        )
+        _print_step("Generating and fixing tests with Claude agent...")
+        success = _run_claude_agent(task, project_path, skip_permissions)
+
+        if plan:
+            if success:
+                plan.complete("generate_tests")
+                for step in ("fix_tests_ruff", "run_tests", "fix_test_failures", "reviewer"):
+                    plan.complete(step, "handled by agent")
+            else:
+                plan.fail("generate_tests", "agent returned non-zero exit code")
+
+        if success:
+            try:
+                _run_cmd(["git", "add", "-A"], cwd=project_path, check=False)
+                _run_cmd(
+                    ["git", "commit", "-q", "-m", "test: generate and fix tests"],
+                    cwd=project_path,
+                    check=False,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        return True
+
+    # ------------------------------------------------------------------
+    # Ollama / other providers: prompt-based path
+    # ------------------------------------------------------------------
     test_template = _load_prompt_template("write_tests")
     if not test_template:
         _print_warn("Test template not found. Skipping test generation.")

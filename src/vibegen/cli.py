@@ -200,6 +200,7 @@ def main(argv: list[str] | None = None) -> int:
             show_output=args.show_output,
             sandbox=sandbox,
             plan=task_plan,
+            skip_permissions=args.skip_permissions,
         )
 
         if code_generated:
@@ -213,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
                 show_output=args.show_output,
                 sandbox=sandbox,
                 plan=task_plan,
+                skip_permissions=args.skip_permissions,
             )
 
             task_plan.start("finalize")
