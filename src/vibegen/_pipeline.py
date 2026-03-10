@@ -345,13 +345,9 @@ def _generate_code(
 ) -> bool:
     """Generate source code, then auto-fix and LLM-fix remaining errors.
 
-    Dispatch order for ``model_provider="claude"``:
-
-    1. ``ANTHROPIC_API_KEY`` set → Anthropic SDK streaming (prompt-based, no
-       subscription credits needed).
-    2. No API key → Claude Code agent via ``claude --print`` (uses subscription).
-
-    For all other providers the prompt-based path is used directly.
+    When *model_provider* is ``"claude"``, the Claude Code agent is invoked
+    directly so it can write files, run ruff, and install packages itself —
+    no output parsing needed.  For ``"ollama"`` the prompt-based path is used.
 
     Args:
         project_path: Project root directory.
@@ -359,10 +355,10 @@ def _generate_code(
         package_name: Python package name (snake_case).
         model_provider: ``"claude"`` or ``"ollama"``.
         model: Model identifier.
-        show_output: Print LLM output when True.
+        show_output: Print LLM output when True (Ollama path only).
         sandbox: Optional Docker sandbox config.
         plan: Optional TaskPlan for progress tracking.
-        skip_permissions: Skip Claude permission prompts when True (agent path only).
+        skip_permissions: Skip Claude permission prompts when True.
 
     Returns:
         True if source files were generated, False otherwise.
@@ -406,8 +402,7 @@ def _generate_code(
         return success
 
     # ------------------------------------------------------------------
-    # Prompt-based path: Anthropic SDK (claude + ANTHROPIC_API_KEY set)
-    # or Ollama — _run_llm dispatches to the right backend automatically.
+    # Ollama prompt-based path
     # ------------------------------------------------------------------
     if plan:
         plan.start("plan_code")
@@ -885,8 +880,7 @@ def _generate_and_fix_tests(
         return True
 
     # ------------------------------------------------------------------
-    # Prompt-based path: Anthropic SDK (claude + ANTHROPIC_API_KEY set)
-    # or Ollama — _run_llm dispatches to the right backend automatically.
+    # Ollama prompt-based path
     # ------------------------------------------------------------------
     test_template = _load_prompt_template("write_tests")
     if not test_template:
