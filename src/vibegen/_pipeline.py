@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -316,12 +317,17 @@ def _run_claude_agent(
     if skip_permissions:
         cmd.append("--dangerously-skip-permissions")
 
+    # Strip CLAUDECODE so the child process is not blocked by the nested-session
+    # guard (Claude Code sets this in the parent environment).
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+
     result = subprocess.run(
         cmd,
         cwd=project_path,
         input=task,
         text=True,
         encoding="utf-8",
+        env=env,
         check=False,
     )
     return result.returncode == 0
