@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -368,7 +367,7 @@ def _generate_code(
     Returns:
         True if source files were generated, False otherwise.
     """
-    if model_provider == "claude" and not os.environ.get("ANTHROPIC_API_KEY"):
+    if model_provider == "claude":
         if plan:
             plan.start("plan_code")
             plan.complete("plan_code", "delegated to Claude agent")
@@ -847,7 +846,7 @@ def _generate_and_fix_tests(
     Returns:
         True (always; failures are reported via warnings).
     """
-    if model_provider == "claude" and not os.environ.get("ANTHROPIC_API_KEY"):
+    if model_provider == "claude":
         if plan:
             plan.start("plan_tests")
             plan.complete("plan_tests", "delegated to Claude agent")
