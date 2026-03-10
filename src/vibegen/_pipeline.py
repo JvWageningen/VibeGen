@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -345,10 +346,13 @@ def _generate_code(
 ) -> bool:
     """Generate source code, then auto-fix and LLM-fix remaining errors.
 
-    When *model_provider* is ``"claude"``, the Claude Code agent is invoked
-    directly so it can write files, run ruff, and install packages itself —
-    no output parsing needed.  For other providers the prompt-based path is
-    used as a fallback.
+    Dispatch order for ``model_provider="claude"``:
+
+    1. ``ANTHROPIC_API_KEY`` set → Anthropic SDK streaming (prompt-based, no
+       subscription credits needed).
+    2. No API key → Claude Code agent via ``claude --print`` (uses subscription).
+
+    For all other providers the prompt-based path is used directly.
 
     Args:
         project_path: Project root directory.
@@ -356,15 +360,15 @@ def _generate_code(
         package_name: Python package name (snake_case).
         model_provider: ``"claude"`` or ``"ollama"``.
         model: Model identifier.
-        show_output: Print LLM output when True (Ollama path only).
+        show_output: Print LLM output when True.
         sandbox: Optional Docker sandbox config.
         plan: Optional TaskPlan for progress tracking.
-        skip_permissions: Skip Claude permission prompts when True.
+        skip_permissions: Skip Claude permission prompts when True (agent path only).
 
     Returns:
         True if source files were generated, False otherwise.
     """
-    if model_provider == "claude":
+    if model_provider == "claude" and not os.environ.get("ANTHROPIC_API_KEY"):
         if plan:
             plan.start("plan_code")
             plan.complete("plan_code", "delegated to Claude agent")
@@ -403,7 +407,8 @@ def _generate_code(
         return success
 
     # ------------------------------------------------------------------
-    # Ollama / other providers: prompt-based path (parse output → write)
+    # Prompt-based path: Anthropic SDK (claude + ANTHROPIC_API_KEY set)
+    # or Ollama — _run_llm dispatches to the right backend automatically.
     # ------------------------------------------------------------------
     if plan:
         plan.start("plan_code")
@@ -842,7 +847,7 @@ def _generate_and_fix_tests(
     Returns:
         True (always; failures are reported via warnings).
     """
-    if model_provider == "claude":
+    if model_provider == "claude" and not os.environ.get("ANTHROPIC_API_KEY"):
         if plan:
             plan.start("plan_tests")
             plan.complete("plan_tests", "delegated to Claude agent")
@@ -881,7 +886,8 @@ def _generate_and_fix_tests(
         return True
 
     # ------------------------------------------------------------------
-    # Ollama / other providers: prompt-based path
+    # Prompt-based path: Anthropic SDK (claude + ANTHROPIC_API_KEY set)
+    # or Ollama — _run_llm dispatches to the right backend automatically.
     # ------------------------------------------------------------------
     test_template = _load_prompt_template("write_tests")
     if not test_template:
