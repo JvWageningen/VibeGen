@@ -1,3 +1,4 @@
+{{web_context}}
 TASK
 You are a Python expert. Fix the linting errors listed below in the given source file.
 Do NOT change any logic or add features — only fix the listed errors.
