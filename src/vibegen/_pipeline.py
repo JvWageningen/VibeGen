@@ -300,12 +300,12 @@ def _run_claude_agent(
 ) -> bool:
     """Run Claude Code agent non-interactively for a focused task.
 
-    The agent reads and writes files directly using its own tools — no output
-    parsing is needed.  Output streams to the terminal so the user can see
-    progress in real-time.
+    The prompt is fed via stdin (``echo task | claude --print``) so the process
+    never blocks waiting for interactive input.  stdout and stderr are *not*
+    captured, so all agent output streams to the user's terminal in real-time.
 
     Args:
-        task: Short task description passed as a positional CLI argument.
+        task: Task prompt piped to the agent via stdin.
         project_path: Working directory for the agent (the generated project).
         skip_permissions: Pass ``--dangerously-skip-permissions`` when True.
 
@@ -315,9 +315,15 @@ def _run_claude_agent(
     cmd = ["claude", "--print"]
     if skip_permissions:
         cmd.append("--dangerously-skip-permissions")
-    cmd.append(task)
 
-    result = subprocess.run(cmd, cwd=project_path, check=False)
+    result = subprocess.run(
+        cmd,
+        cwd=project_path,
+        input=task,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
     return result.returncode == 0
 
 

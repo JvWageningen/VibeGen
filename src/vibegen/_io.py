@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from .sandbox import SandboxConfig
+
+
+def _ts() -> str:
+    """Return a compact HH:MM:SS timestamp string."""
+    return datetime.now().strftime("%H:%M:%S")
 
 
 def _write_file(path: Path, content: str) -> None:
@@ -26,23 +32,23 @@ def _write_file(path: Path, content: str) -> None:
 
 
 def _print_step(message: str) -> None:
-    """Print a [STEP] progress message."""
-    print(f"[STEP]  {message}")
+    """Print a [STEP] progress message with timestamp."""
+    print(f"[{_ts()}][STEP]  {message}", flush=True)
 
 
 def _print_ok(message: str) -> None:
-    """Print an [OK] success message."""
-    print(f"[OK]    {message}")
+    """Print an [OK] success message with timestamp."""
+    print(f"[{_ts()}][OK]    {message}", flush=True)
 
 
 def _print_warn(message: str) -> None:
-    """Print a [WARN] warning message."""
-    print(f"[WARN]  {message}")
+    """Print a [WARN] warning message with timestamp."""
+    print(f"[{_ts()}][WARN]  {message}", flush=True)
 
 
 def _print_err(message: str) -> None:
-    """Print an [ERR] error message to stderr."""
-    print(f"[ERR]   {message}", file=sys.stderr)
+    """Print an [ERR] error message to stderr with timestamp."""
+    print(f"[{_ts()}][ERR]   {message}", file=sys.stderr, flush=True)
 
 
 # ---------------------------------------------------------------------------
