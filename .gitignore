@@ -1,18 +1,14 @@
-# Personal spec files
-spec.md
-
-# Local install artifacts
-*.backup.*
-
-# OS
-Thumbs.db
-desktop.ini
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+dist/
+build/
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.log
+.env
+.env.*
 .DS_Store
-
-# Editor
-.vscode/
-*.swp
-
-test-projects/
-test-outputs/
-test-output/

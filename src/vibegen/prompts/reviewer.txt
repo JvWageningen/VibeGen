@@ -1,0 +1,18 @@
+TASK
+You are performing a spec compliance check on generated Python code.
+
+SPEC
+{{spec}}
+
+GENERATED SOURCE
+{{source}}
+
+INSTRUCTIONS
+1. Extract every concrete requirement from the spec (functions, classes, CLI commands, behaviours, edge cases, return values).
+2. Check each requirement against the generated source code.
+3. For each unmet requirement output a line: MISSING: <brief description>
+4. If all requirements are met output exactly: SPEC_SATISFIED
+
+OUTPUT FORMAT
+Output only MISSING: lines or the single token SPEC_SATISFIED.
+No explanations, no code, no markdown.

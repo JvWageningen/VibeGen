@@ -7,7 +7,9 @@ src/vibegen/_io.py
 src/vibegen/_llm.py
 src/vibegen/_output_parser.py
 src/vibegen/_pipeline.py
+src/vibegen/_plan.py
 src/vibegen/_scaffold.py
+src/vibegen/_session.py
 src/vibegen/cli.py
 src/vibegen/ollama_client.py
 src/vibegen/sandbox.py
@@ -23,5 +25,15 @@ src/vibegen/prompts/fix_tests.txt
 src/vibegen/prompts/generate_code.txt
 src/vibegen/prompts/plan.txt
 src/vibegen/prompts/plan_tests.txt
+src/vibegen/prompts/reviewer.txt
+src/vibegen/prompts/role_architect.txt
+src/vibegen/prompts/role_reviewer.txt
 src/vibegen/prompts/system.txt
 src/vibegen/prompts/write_tests.txt
+tests/test_analysis.py
+tests/test_io.py
+tests/test_output_parser.py
+tests/test_pipeline_helpers.py
+tests/test_sandbox.py
+tests/test_scaffold.py
+tests/test_web_search.py

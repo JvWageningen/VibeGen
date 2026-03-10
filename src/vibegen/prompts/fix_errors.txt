@@ -12,6 +12,7 @@ INSTALLED DEPENDENCIES (the only packages available in this project)
 ERRORS TO FIX
 {{errors}}
 
+{{error_context}}
 CURRENT FILE CONTENT
 {{file_content}}
 

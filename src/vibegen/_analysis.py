@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import ast
+import re
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -337,3 +339,116 @@ def _get_repo_tree(project_path: Path, max_depth: int = 5) -> str:
         return sub_lines
 
     return "\n".join([f"{project_path.name}/"] + _tree_lines(project_path))
+
+
+# ---------------------------------------------------------------------------
+# Structured error context
+# ---------------------------------------------------------------------------
+
+_CONTEXT_LINES = 10  # lines of source to include before/after each error
+
+
+@dataclass
+class ErrorContext:
+    """Structured representation of a single lint or test error.
+
+    Attributes:
+        file: Relative file path (forward-slash).
+        error_type: Short category string (e.g. ``"ImportError"``, ``"ruff:F401"``).
+        message: Full error message.
+        line: Source line number (1-based), or None if unknown.
+        relevant_source: Lines ±10 around the error for focused LLM context.
+        web_context: Optional web-search results for additional context.
+    """
+
+    file: str
+    error_type: str
+    message: str
+    line: int | None = None
+    relevant_source: str = ""
+    web_context: str = ""
+
+    def render(self) -> str:
+        """Format this error as a plain-text block for an LLM prompt.
+
+        Returns:
+            Multi-line string with all fields populated.
+        """
+        parts = [
+            f"FILE: {self.file}",
+            f"TYPE: {self.error_type}",
+            f"ERROR: {self.message}",
+        ]
+        if self.line is not None:
+            parts.append(f"LINE: {self.line}")
+        if self.relevant_source:
+            parts.append(f"\nRELEVANT SOURCE:\n{self.relevant_source}")
+        if self.web_context:
+            parts.append(f"\nWEB CONTEXT:\n{self.web_context}")
+        return "\n".join(parts)
+
+
+def _build_error_context(
+    project_path: Path,
+    file_path: str,
+    error_line: str,
+    web_context: str = "",
+    context_lines: int = _CONTEXT_LINES,
+) -> ErrorContext:
+    """Build an ErrorContext from a ruff or pytest error line.
+
+    Parses the error line to extract type, message, and line number, then
+    reads the relevant ±*context_lines* lines from the source file.
+
+    Args:
+        project_path: Project root directory.
+        file_path: Relative path to the file containing the error.
+        error_line: Raw error string (ruff ``path:line:col: CODE msg`` or
+            pytest traceback line).
+        web_context: Optional web-search context to attach.
+        context_lines: Number of source lines to include above/below the error.
+
+    Returns:
+        Populated ErrorContext instance.
+    """
+    # Try to parse "path:line:col: CODE message" (ruff format)
+    line_num: int | None = None
+    error_type = "unknown"
+    message = error_line.strip()
+
+    ruff_match = re.search(r":(\d+):\d+:\s+([A-Z]\d+)\s+(.*)", error_line)
+    if ruff_match:
+        line_num = int(ruff_match.group(1))
+        error_type = f"ruff:{ruff_match.group(2)}"
+        message = ruff_match.group(3).strip()
+    else:
+        # Try pytest "path:line: ErrorType: message"
+        pytest_match = re.search(r":(\d+):\s+(\w+Error|\w+Exception):\s+(.*)", error_line)
+        if pytest_match:
+            line_num = int(pytest_match.group(1))
+            error_type = pytest_match.group(2)
+            message = pytest_match.group(3).strip()
+
+    # Extract relevant source lines
+    relevant_source = ""
+    full_path = project_path / file_path.replace("/", "\\")
+    if full_path.exists() and line_num is not None:
+        try:
+            all_lines = full_path.read_text(encoding="utf-8").splitlines()
+            start = max(0, line_num - context_lines - 1)
+            end = min(len(all_lines), line_num + context_lines)
+            numbered = [
+                f"{i + 1:4d} | {all_lines[i]}" for i in range(start, end)
+            ]
+            relevant_source = "\n".join(numbered)
+        except OSError:
+            pass
+
+    return ErrorContext(
+        file=file_path,
+        error_type=error_type,
+        message=message,
+        line=line_num,
+        relevant_source=relevant_source,
+        web_context=web_context,
+    )

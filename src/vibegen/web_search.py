@@ -1,18 +1,24 @@
 """Stdlib-only web search for LLM context enrichment.
 
-Searches DuckDuckGo, filters results to trusted Python/programming domains,
-then fetches and extracts meaningful content from each page.
+Supports multiple search providers via a Protocol interface:
+- DuckDuckGo (default, no API key required)
+- Google Custom Search (requires GOOGLE_API_KEY + GOOGLE_SEARCH_ENGINE_ID env vars)
+
+Results are scored by domain priority, fetched, and text-extracted.
 """
 
 from __future__ import annotations
 
 import contextlib
 import html as html_module
+import json
+import os
 import re
 import urllib.error
 import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
+from typing import Protocol
 
 # ---------------------------------------------------------------------------
 # Domain configuration
@@ -66,7 +72,6 @@ _SKIP_CSS: tuple[str, ...] = (
     "social",
     "subscribe",
     "signup",
-    "signup",
 )
 _BLOCK_TAGS: frozenset[str] = frozenset(
     {
@@ -88,6 +93,44 @@ _BLOCK_TAGS: frozenset[str] = frozenset(
         "dd",
     }
 )
+
+
+# ---------------------------------------------------------------------------
+# Search provider protocol
+# ---------------------------------------------------------------------------
+
+
+class SearchResult:
+    """A single search result with URL, title, and snippet.
+
+    Attributes:
+        url: Target page URL.
+        title: Page title from the search engine.
+        snippet: Short description from the search engine.
+    """
+
+    __slots__ = ("url", "title", "snippet")
+
+    def __init__(self, url: str, title: str, snippet: str) -> None:
+        self.url = url
+        self.title = title
+        self.snippet = snippet
+
+
+class SearchProvider(Protocol):
+    """Protocol for search provider implementations."""
+
+    def search(self, query: str, max_results: int) -> list[SearchResult]:
+        """Execute a search and return up to *max_results* results.
+
+        Args:
+            query: Search query string.
+            max_results: Maximum number of results to return.
+
+        Returns:
+            List of SearchResult objects (may be empty).
+        """
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +171,127 @@ class _DDGParser(HTMLParser):
                 self.results.append(self._current)
                 self._current = None
             self._capture = None
+
+
+class DuckDuckGoProvider:
+    """Search provider backed by DuckDuckGo HTML (stdlib only, no API key)."""
+
+    def search(self, query: str, max_results: int) -> list[SearchResult]:
+        """Query DuckDuckGo HTML and return parsed results.
+
+        Args:
+            query: Search query string.
+            max_results: Maximum number of results to return.
+
+        Returns:
+            List of SearchResult objects, empty on any error.
+        """
+        search_url = (
+            "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote_plus(query)
+        )
+        req = urllib.request.Request(search_url, headers={"User-Agent": _UA})
+        try:
+            with urllib.request.urlopen(req, timeout=_SEARCH_TIMEOUT) as resp:
+                body = resp.read().decode("utf-8", errors="replace")
+        except (urllib.error.URLError, OSError):
+            return []
+
+        parser = _DDGParser()
+        with contextlib.suppress(Exception):
+            parser.feed(body)
+
+        results: list[SearchResult] = []
+        for r in parser.results[:max_results]:
+            url = r.get("url", "").strip()
+            if url:
+                results.append(
+                    SearchResult(
+                        url=url,
+                        title=html_module.unescape(r.get("title", "")).strip(),
+                        snippet=html_module.unescape(r.get("snippet", "")).strip(),
+                    )
+                )
+        return results
+
+
+class GoogleProvider:
+    """Search provider backed by Google Custom Search JSON API.
+
+    Requires environment variables:
+    - ``GOOGLE_API_KEY``: Google API key with Custom Search enabled.
+    - ``GOOGLE_SEARCH_ENGINE_ID``: Programmable Search Engine ID (cx parameter).
+    """
+
+    _API_URL = "https://www.googleapis.com/customsearch/v1"
+
+    def __init__(self) -> None:
+        self.api_key = os.environ.get("GOOGLE_API_KEY", "")
+        self.cx = os.environ.get("GOOGLE_SEARCH_ENGINE_ID", "")
+
+    @classmethod
+    def is_available(cls) -> bool:
+        """Return True when both required env vars are set."""
+        return bool(
+            os.environ.get("GOOGLE_API_KEY") and
+            os.environ.get("GOOGLE_SEARCH_ENGINE_ID")
+        )
+
+    def search(self, query: str, max_results: int) -> list[SearchResult]:
+        """Query the Google Custom Search API and return parsed results.
+
+        Args:
+            query: Search query string.
+            max_results: Maximum number of results to return (capped at 10 by API).
+
+        Returns:
+            List of SearchResult objects, empty on any error.
+        """
+        if not self.api_key or not self.cx:
+            return []
+
+        params = urllib.parse.urlencode({
+            "key": self.api_key,
+            "cx": self.cx,
+            "q": query,
+            "num": min(max_results, 10),
+        })
+        req = urllib.request.Request(
+            f"{self._API_URL}?{params}", headers={"User-Agent": _UA}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=_SEARCH_TIMEOUT) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="replace"))
+        except (urllib.error.URLError, OSError, json.JSONDecodeError):
+            return []
+
+        results: list[SearchResult] = []
+        for item in data.get("items", []):
+            url = item.get("link", "").strip()
+            if url:
+                results.append(
+                    SearchResult(
+                        url=url,
+                        title=item.get("title", "").strip(),
+                        snippet=item.get("snippet", "").strip(),
+                    )
+                )
+        return results
+
+
+def _default_providers() -> list[SearchProvider]:
+    """Return the ordered provider list based on available credentials.
+
+    Google is preferred when credentials are present; DuckDuckGo is always
+    included as fallback.
+
+    Returns:
+        Ordered list of SearchProvider instances.
+    """
+    providers: list[SearchProvider] = []
+    if GoogleProvider.is_available():
+        providers.append(GoogleProvider())
+    providers.append(DuckDuckGoProvider())
+    return providers
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +403,6 @@ def _get_domain(url: str) -> str:
     """Return the registrable domain portion of *url* (e.g. ``stackoverflow.com``)."""
     try:
         host = urllib.parse.urlparse(url).netloc.lower()
-        # Strip www. prefix
         return host.removeprefix("www.")
     except Exception:  # noqa: BLE001
         return ""
@@ -255,22 +418,14 @@ def _score_url(url: str) -> int:
 
 
 def _normalize_url(url: str) -> str:
-    """Convert GitHub blob URLs to raw content URLs for direct fetching.
-
-    Args:
-        url: Original URL from DDG results.
-
-    Returns:
-        Possibly-rewritten URL that resolves to plain text/HTML content.
-    """
-    # GitHub blob viewer → raw content
-    # https://github.com/owner/repo/blob/main/file.py
-    # → https://raw.githubusercontent.com/owner/repo/main/file.py
+    """Convert GitHub blob URLs to raw content URLs for direct fetching."""
     gh_blob = re.match(
         r"https://github\.com/([^/]+/[^/]+)/blob/(.+)", url
     )
     if gh_blob:
-        return f"https://raw.githubusercontent.com/{gh_blob.group(1)}/{gh_blob.group(2)}"
+        return (
+            f"https://raw.githubusercontent.com/{gh_blob.group(1)}/{gh_blob.group(2)}"
+        )
     return url
 
 
@@ -280,15 +435,7 @@ def _normalize_url(url: str) -> str:
 
 
 def _fetch_html(url: str, timeout: int = _FETCH_TIMEOUT) -> str:
-    """Fetch *url* and return the response body as a string.
-
-    Args:
-        url: Target URL.
-        timeout: Request timeout in seconds.
-
-    Returns:
-        Response body, or ``""`` on any error.
-    """
+    """Fetch *url* and return the response body as a string."""
     req = urllib.request.Request(url, headers={"User-Agent": _UA})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -298,32 +445,16 @@ def _fetch_html(url: str, timeout: int = _FETCH_TIMEOUT) -> str:
 
 
 def _extract_stackoverflow(html: str) -> str:
-    """Prefer the accepted (or top-voted) answer from a Stack Overflow page.
-
-    Finds the first ``accepted-answer`` div; falls back to the first ``answer``
-    div if none is accepted.  Both the question body and the answer body are
-    included.
-
-    Args:
-        html: Full HTML source of the Stack Overflow page.
-
-    Returns:
-        Extracted text capped at ``_MAX_CONTENT_CHARS``.
-    """
-    # Isolate the answer section to extract from.
+    """Prefer the accepted (or top-voted) answer from a Stack Overflow page."""
     answer_html = ""
     for marker in ("accepted-answer", "js-answer"):
         idx = html.find(marker)
         if idx != -1:
-            # Find the enclosing div start (scan backwards for <div)
             start = html.rfind("<div", 0, idx)
             if start != -1:
-                # Extract a generous chunk after that div
                 answer_html = html[start : start + 30_000]
                 break
 
-    # Build combined source: question first, then answer.
-    # The question body has class "question" around it.
     q_idx = html.find('class="question"')
     question_html = html[max(0, q_idx - 5) : q_idx + 20_000] if q_idx != -1 else ""
 
@@ -335,21 +466,11 @@ def _extract_stackoverflow(html: str) -> str:
 
 
 def _extract_page_content(html: str, url: str) -> str:
-    """Dispatch to a site-specific extractor or the generic one.
-
-    Args:
-        html: Full HTML (or plain text) of the fetched page.
-        url: Original URL (used to detect the site).
-
-    Returns:
-        Extracted plain-text content.
-    """
-    domain = _get_domain(url)
-
-    # Raw content (e.g. GitHub raw files) — return as-is, capped.
+    """Dispatch to a site-specific extractor or the generic one."""
     if "raw.githubusercontent.com" in url:
         return html[:_MAX_CONTENT_CHARS]
 
+    domain = _get_domain(url)
     if "stackoverflow.com" in domain:
         return _extract_stackoverflow(html)
 
@@ -364,53 +485,48 @@ def _extract_page_content(html: str, url: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def web_search(query: str, max_results: int = 5) -> str:
-    """Search DuckDuckGo, fetch top results from trusted domains, return context.
+def web_search(
+    query: str,
+    max_results: int = 5,
+    providers: list[SearchProvider] | None = None,
+) -> str:
+    """Search the web, fetch top results from trusted domains, return context.
 
-    The function:
-    1. Queries ``html.duckduckgo.com`` for results.
-    2. Scores each result by domain (Stack Overflow, Python docs, PyPI, etc.)
-       and sorts preferred domains first.
-    3. Fetches the actual page content for up to *max_results* URLs.
-    4. Returns a formatted plain-text block suitable as LLM context.
-
-    Uses stdlib only — no external dependencies.  Returns ``""`` on any error
-    so callers can degrade gracefully.
+    Uses a provider chain (Google if credentials present, else DuckDuckGo).
+    Results are scored by domain priority (Stack Overflow, Python docs, PyPI,
+    GitHub, etc.), fetched, and text-extracted for LLM consumption.
 
     Args:
         query: Search query string.
         max_results: Maximum number of results to fetch content from.
+        providers: Override the default provider chain.  Each provider is
+            tried in order; results are de-duplicated by URL.
 
     Returns:
         Formatted plain-text block with extracted page content, or ``""``.
     """
-    search_url = (
-        "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote_plus(query)
-    )
-    req = urllib.request.Request(search_url, headers={"User-Agent": _UA})
-    try:
-        with urllib.request.urlopen(req, timeout=_SEARCH_TIMEOUT) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
-    except (urllib.error.URLError, OSError):
-        return ""
+    if providers is None:
+        providers = _default_providers()
 
-    ddg_parser = _DDGParser()
-    try:
-        ddg_parser.feed(body)
-    except Exception:  # noqa: BLE001
-        return ""
+    # Collect results from all providers, de-duplicate by URL.
+    seen_urls: set[str] = set()
+    all_results: list[SearchResult] = []
+    for provider in providers:
+        for r in provider.search(query, max_results):
+            if r.url not in seen_urls:
+                seen_urls.add(r.url)
+                all_results.append(r)
+        if len(all_results) >= max_results:
+            break
 
-    if not ddg_parser.results:
+    if not all_results:
         return ""
 
     # Score and sort: preferred domains first, then by original order.
-    scored: list[tuple[int, int, dict[str, str]]] = []
-    for idx, result in enumerate(ddg_parser.results):
-        url = result.get("url", "").strip()
-        if not url:
-            continue
-        score = _score_url(url)
-        scored.append((-score, idx, result))  # negative for descending sort
+    scored: list[tuple[int, int, SearchResult]] = []
+    for idx, result in enumerate(all_results):
+        score = _score_url(result.url)
+        scored.append((-score, idx, result))
     scored.sort(key=lambda t: (t[0], t[1]))
 
     lines: list[str] = ["=== Web Search Results ==="]
@@ -420,27 +536,20 @@ def web_search(query: str, max_results: int = 5) -> str:
         if fetched >= max_results:
             break
 
-        raw_url = result.get("url", "").strip()
-        title = html_module.unescape(result.get("title", "")).strip()
-        snippet = html_module.unescape(result.get("snippet", "")).strip()
-        score = _score_url(raw_url)
-
-        fetch_url = _normalize_url(raw_url)
+        score = _score_url(result.url)
+        fetch_url = _normalize_url(result.url)
         content = ""
         if score > 0 or fetched < 2:
-            # Always attempt to fetch preferred-domain results; also fetch
-            # the first two results regardless of domain.
             html_body = _fetch_html(fetch_url)
             if html_body:
                 content = _extract_page_content(html_body, fetch_url)
 
-        lines.append(f"\n[{fetched + 1}] {title}")
-        lines.append(f"    {raw_url}")
+        lines.append(f"\n[{fetched + 1}] {result.title}")
+        lines.append(f"    {result.url}")
         if content:
             lines.append(f"\n{content}")
-        elif snippet:
-            # Fall back to DDG snippet when page fetch fails or yields nothing.
-            lines.append(f"    {snippet}")
+        elif result.snippet:
+            lines.append(f"    {result.snippet}")
 
         fetched += 1
 

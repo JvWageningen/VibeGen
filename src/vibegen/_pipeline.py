@@ -4,20 +4,24 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ._analysis import (
     _build_dependency_graph,
+    _build_error_context,
     _get_installed_package_names,
     _get_pyproject_deps,
     _get_repo_tree,
     _read_source_files,
 )
 from ._io import _print_ok, _print_step, _print_warn, _run_cmd, _write_file
-from ._llm import _load_prompt_template, _render_template, _run_llm
+from ._llm import _load_prompt_template, _render_template, _run_llm, _run_llm_role
 from ._output_parser import _parse_generated_files, _write_generated_files
 from .sandbox import SandboxConfig
 from .web_search import web_search
+
+if TYPE_CHECKING:
+    from ._plan import TaskPlan
 
 # ---------------------------------------------------------------------------
 # Code quality helpers
@@ -249,6 +253,13 @@ def _fix_code_errors_with_llm(
         if not full_path.exists():
             continue
 
+        # Build focused error context (±10 lines around each error).
+        ctx_blocks = [
+            _build_error_context(project_path, rel_path, err, web_context)
+            for err in file_errors
+        ]
+        error_context_str = "\n\n".join(c.render() for c in ctx_blocks)
+
         prompt = _render_template(
             fix_template,
             {
@@ -257,6 +268,7 @@ def _fix_code_errors_with_llm(
                 "file_content": full_path.read_text(encoding="utf-8"),
                 "errors": "\n".join(file_errors),
                 "installed_deps": installed_deps,
+                "error_context": error_context_str,
             },
         )
 
@@ -289,6 +301,7 @@ def _generate_code(
     model: str,
     show_output: bool = False,
     sandbox: SandboxConfig | None = None,
+    plan: TaskPlan | None = None,
 ) -> bool:
     """Generate source code with LLM, then auto-fix and LLM-fix remaining errors.
 
@@ -300,17 +313,22 @@ def _generate_code(
         model: Model identifier.
         show_output: Print LLM output when True.
         sandbox: Optional Docker sandbox config.
+        plan: Optional TaskPlan for progress tracking.
 
     Returns:
         True if source files were generated, False otherwise.
     """
-    _print_step("Planning implementation (module design phase)...")
+    if plan:
+        plan.start("plan_code")
 
     plan_template = _load_prompt_template("plan")
     code_template = _load_prompt_template("generate_code")
 
     if not plan_template or not code_template:
         _print_warn("Prompt templates not found. Skipping code generation.")
+        if plan:
+            plan.fail("plan_code", "prompt templates not found")
+            plan.skip("generate_code")
         return False
 
     repo_tree = _get_repo_tree(project_path)
@@ -339,8 +357,9 @@ def _generate_code(
 
     _print_step("Planning with LLM...")
     plan_output = _run_llm(plan_prompt, model_provider, model, show_output=show_output)
-    _print_ok("Planning complete")
     _write_file(project_path / "MODEL_OUTPUT_plan.txt", plan_output)
+    if plan:
+        plan.complete("plan_code")
 
     code_prompt = _render_template(
         code_template,
@@ -353,6 +372,8 @@ def _generate_code(
         },
     )
 
+    if plan:
+        plan.start("generate_code")
     _print_step("Generating source code with LLM...")
     code_output = _run_llm(code_prompt, model_provider, model, show_output=show_output)
     _write_file(project_path / "MODEL_OUTPUT_code.txt", code_output)
@@ -363,18 +384,27 @@ def _generate_code(
         _print_warn(
             f"Raw output saved to MODEL_OUTPUT_code.txt ({len(code_output)} chars)"
         )
+        if plan:
+            plan.fail("generate_code", "LLM returned no files")
         return False
 
     count = _write_generated_files(project_path, generated)
-    _print_ok(f"Generated {count} files")
+    if plan:
+        plan.complete("generate_code", f"{count} files")
 
     src_dir = project_path / "src" / package_name
 
     # Pass 1: auto-fix with ruff
+    if plan:
+        plan.start("fix_code_ruff")
     _print_step("Formatting generated code...")
     _format_code(project_path, sandbox=sandbox)
+    if plan:
+        plan.complete("fix_code_ruff")
 
     # Pass 2: LLM-fix non-auto-fixable ruff errors in src/
+    if plan:
+        plan.start("fix_code_llm")
     _fix_code_errors_with_llm(
         project_path,
         ["src/"],
@@ -384,6 +414,8 @@ def _generate_code(
         show_output,
         sandbox=sandbox,
     )
+    if plan:
+        plan.complete("fix_code_llm")
 
     # Pass 3: install missing packages (ruff can't detect these)
     installed_deps = _install_missing_deps(
@@ -648,6 +680,69 @@ def _fix_pytest_failures_with_llm(
         _format_code(project_path, sandbox=sandbox)
 
 
+def _run_reviewer_pass(
+    project_path: Path,
+    spec: dict[str, Any],
+    package_name: str,
+    model_provider: str,
+    model: str,
+    show_output: bool = False,
+) -> list[str]:
+    """Run a spec-compliance review of the generated source code.
+
+    Uses the ``reviewer`` role prompt to check every spec requirement against
+    the generated implementation.  Returns a list of ``MISSING:`` lines, or
+    an empty list when the spec is satisfied.
+
+    Args:
+        project_path: Project root directory.
+        spec: Parsed spec dict.
+        package_name: Python package name.
+        model_provider: ``"claude"`` or ``"ollama"``.
+        model: Model identifier.
+        show_output: Print LLM output when True.
+
+    Returns:
+        List of unmet-requirement strings (``"MISSING: ..."``), or ``[]``.
+    """
+    reviewer_template = _load_prompt_template("reviewer")
+    if not reviewer_template:
+        _print_warn("reviewer template not found — skipping spec compliance check.")
+        return []
+
+    src_dir = project_path / "src" / package_name
+    source_context = _read_source_files(src_dir, project_path)
+
+    prompt = _render_template(
+        reviewer_template,
+        {
+            "spec": spec["raw"],
+            "source": source_context,
+        },
+    )
+
+    _print_step("Running spec compliance review...")
+    response = _run_llm_role(
+        "reviewer", prompt, model_provider, model, show_output=show_output
+    )
+
+    if "SPEC_SATISFIED" in response:
+        _print_ok("Spec compliance check passed")
+        return []
+
+    missing = [
+        line.strip()
+        for line in response.splitlines()
+        if line.strip().startswith("MISSING:")
+    ]
+    if missing:
+        for item in missing:
+            _print_warn(item)
+    else:
+        _print_ok("Spec compliance check passed")
+    return missing
+
+
 def _generate_and_fix_tests(
     project_path: Path,
     spec: dict[str, Any],
@@ -657,6 +752,7 @@ def _generate_and_fix_tests(
     max_fix_attempts: int = 3,
     show_output: bool = False,
     sandbox: SandboxConfig | None = None,
+    plan: TaskPlan | None = None,
 ) -> bool:
     """Plan tests from actual source, generate them, fix errors, then run pytest.
 
@@ -669,6 +765,7 @@ def _generate_and_fix_tests(
         max_fix_attempts: Number of test-fix retry cycles.
         show_output: Print LLM output when True.
         sandbox: Optional Docker sandbox config.
+        plan: Optional TaskPlan for progress tracking.
 
     Returns:
         True (always; failures are reported via warnings).
@@ -676,22 +773,33 @@ def _generate_and_fix_tests(
     test_template = _load_prompt_template("write_tests")
     if not test_template:
         _print_warn("Test template not found. Skipping test generation.")
+        if plan:
+            plan.skip("plan_tests", "template not found")
+            plan.skip("generate_tests", "template not found")
         return True
 
     src_dir = project_path / "src" / package_name
     if not src_dir.exists():
         _print_warn("No source directory found.")
+        if plan:
+            plan.skip("plan_tests", "no source dir")
+            plan.skip("generate_tests", "no source dir")
         return True
 
     modules = [f for f in src_dir.rglob("*.py") if f.name != "__init__.py"]
     if not modules:
         _print_warn("No source modules found to test.")
+        if plan:
+            plan.skip("plan_tests", "no source modules")
+            plan.skip("generate_tests", "no source modules")
         return True
 
     source_files = _read_source_files(src_dir, project_path)
     dependency_graph = _build_dependency_graph(src_dir, package_name)
     installed_deps = _get_pyproject_deps(project_path)
 
+    if plan:
+        plan.start("plan_tests")
     test_plan = _plan_tests(
         project_path,
         spec,
@@ -703,7 +811,11 @@ def _generate_and_fix_tests(
         model,
         show_output=show_output,
     )
+    if plan:
+        plan.complete("plan_tests")
 
+    if plan:
+        plan.start("generate_tests")
     _print_step("Generating tests with LLM...")
     constraints = (
         f"Use pytest. Cover edge cases.\n"
@@ -736,10 +848,14 @@ def _generate_and_fix_tests(
 
     _print_ok("Tests generated")
     _relocate_test_files(project_path)
+    if plan:
+        plan.complete("generate_tests", f"{len(modules)} modules")
 
     tests_dir = project_path / "tests"
 
     # Pass 1: auto-fix
+    if plan:
+        plan.start("fix_tests_ruff")
     _format_code(project_path, sandbox=sandbox)
 
     # Pass 2: LLM-fix non-auto-fixable ruff errors in tests/
@@ -752,6 +868,8 @@ def _generate_and_fix_tests(
         show_output,
         sandbox=sandbox,
     )
+    if plan:
+        plan.complete("fix_tests_ruff")
 
     # Pass 3: install missing packages in tests/
     if tests_dir.exists():
@@ -767,15 +885,38 @@ def _generate_and_fix_tests(
     _format_code(project_path, sandbox=sandbox)
 
     for attempt in range(1, max_fix_attempts + 1):
+        if plan and attempt == 1:
+            plan.start("run_tests")
         _print_step(f"Running tests (attempt {attempt}/{max_fix_attempts})...")
         passed, output = _run_tests(project_path, sandbox=sandbox)
         if passed:
+            if plan:
+                plan.complete("run_tests", "all passing")
+                plan.skip("fix_test_failures", "not needed")
             _print_ok("All tests passing!")
+
+            # Reviewer pass: check spec compliance after tests pass.
+            if plan:
+                plan.start("reviewer")
+            missing = _run_reviewer_pass(
+                project_path, spec, package_name, model_provider, model, show_output
+            )
+            if plan:
+                if missing:
+                    plan.fail("reviewer", f"{len(missing)} requirement(s) missing")
+                else:
+                    plan.complete("reviewer")
             break
         if attempt >= max_fix_attempts:
+            if plan:
+                plan.fail("run_tests" if attempt == 1 else "fix_test_failures",
+                          "max attempts reached")
             _print_warn("Max attempts reached. Some tests may still be failing.")
             print(output[-500:] if len(output) > 500 else output)
             break
+        if plan and attempt == 1:
+            plan.fail("run_tests", "tests failing")
+            plan.start("fix_test_failures")
         _print_warn("Tests failing. Attempting to fix...")
 
         # From the 2nd failed attempt onwards, enrich context with a web search.
