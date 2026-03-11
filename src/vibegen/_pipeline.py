@@ -297,7 +297,9 @@ def _fix_code_errors_with_llm(
 def _run_claude_agent(
     task: str,
     project_path: Path,
-    skip_permissions: bool = True,
+    model: str = "claude-sonnet-4-6",
+    max_turns: int = 30,
+    skip_permissions: bool = False,
 ) -> bool:
     """Run Claude Code agent non-interactively for a focused task.
 
@@ -305,17 +307,29 @@ def _run_claude_agent(
     never blocks waiting for interactive input.  stdout and stderr are *not*
     captured, so all agent output streams to the user's terminal in real-time.
 
+    Permission flags mirror the original vibegen.ps1 behaviour:
+    - ``skip_permissions=True``  → ``--dangerously-skip-permissions``
+    - ``skip_permissions=False`` → ``--allowedTools Read Write Edit Bash Glob Grep``
+
+    Without at least one of these, ``claude --print`` prompts interactively for
+    every tool use and hangs indefinitely.
+
     Args:
         task: Task prompt piped to the agent via stdin.
         project_path: Working directory for the agent (the generated project).
-        skip_permissions: Pass ``--dangerously-skip-permissions`` when True.
+        model: Claude model identifier (passed as ``--model``).
+        max_turns: Maximum agentic turns (passed as ``--max-turns``).
+        skip_permissions: Use ``--dangerously-skip-permissions`` when True,
+            otherwise use explicit ``--allowedTools`` list.
 
     Returns:
         True if the agent exited with code 0.
     """
-    cmd = ["claude", "--print"]
+    cmd = ["claude", "--print", "--model", model, "--max-turns", str(max_turns)]
     if skip_permissions:
         cmd.append("--dangerously-skip-permissions")
+    else:
+        cmd.extend(["--allowedTools", "Read", "Write", "Edit", "Bash", "Glob", "Grep"])
 
     # Strip CLAUDECODE so the child process is not blocked by the nested-session
     # guard (Claude Code sets this in the parent environment).
@@ -347,7 +361,8 @@ def _generate_code(
     show_output: bool = False,
     sandbox: SandboxConfig | None = None,
     plan: TaskPlan | None = None,
-    skip_permissions: bool = True,
+    skip_permissions: bool = False,
+    max_turns: int = 30,
 ) -> bool:
     """Generate source code, then auto-fix and LLM-fix remaining errors.
 
@@ -385,7 +400,10 @@ def _generate_code(
             "Do NOT generate tests — only source code."
         )
         _print_step("Generating source code with Claude agent...")
-        success = _run_claude_agent(task, project_path, skip_permissions)
+        success = _run_claude_agent(
+            task, project_path, model=model, max_turns=max_turns,
+            skip_permissions=skip_permissions,
+        )
 
         if plan:
             if success:
@@ -823,7 +841,8 @@ def _generate_and_fix_tests(
     show_output: bool = False,
     sandbox: SandboxConfig | None = None,
     plan: TaskPlan | None = None,
-    skip_permissions: bool = True,
+    skip_permissions: bool = False,
+    max_turns: int = 30,
 ) -> bool:
     """Plan tests from actual source, generate them, fix errors, then run pytest.
 
@@ -863,7 +882,10 @@ def _generate_and_fix_tests(
             "6. Run: uv run ruff check --fix && uv run ruff format tests/ when done."
         )
         _print_step("Generating and fixing tests with Claude agent...")
-        success = _run_claude_agent(task, project_path, skip_permissions)
+        success = _run_claude_agent(
+            task, project_path, model=model, max_turns=max_turns,
+            skip_permissions=skip_permissions,
+        )
 
         if plan:
             if success:

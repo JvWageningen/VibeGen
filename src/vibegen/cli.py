@@ -201,6 +201,7 @@ def main(argv: list[str] | None = None) -> int:
             sandbox=sandbox,
             plan=task_plan,
             skip_permissions=args.skip_permissions,
+            max_turns=args.max_turns,
         )
 
         if code_generated:
@@ -215,6 +216,7 @@ def main(argv: list[str] | None = None) -> int:
                 sandbox=sandbox,
                 plan=task_plan,
                 skip_permissions=args.skip_permissions,
+                max_turns=args.max_turns,
             )
 
             task_plan.start("finalize")
