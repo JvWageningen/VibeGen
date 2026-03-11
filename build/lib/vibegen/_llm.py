@@ -154,6 +154,7 @@ def _run_claude(prompt: str, model: str, system_prompt: str, show_output: bool) 
         cmd,
         input=prompt,
         text=True,
+        encoding="utf-8",
         capture_output=True,
         check=False,
     )

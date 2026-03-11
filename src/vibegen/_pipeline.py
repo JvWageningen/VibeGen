@@ -331,15 +331,21 @@ def _run_claude_agent(
     else:
         cmd.extend(["--allowedTools", "Read", "Write", "Edit", "Bash", "Glob", "Grep"])
 
-    # Strip VS Code extension env vars so the child claude process uses the
-    # user's standalone auth (claude auth login) rather than the extension's
-    # separate billing account.
-    # - CLAUDECODE          → nested-session guard (blocks launch entirely)
-    # - CLAUDE_CODE_ENTRYPOINT=claude-vscode → routes to extension billing
-    # - CLAUDE_CODE_ENABLE_* → extension-only feature flags
-    _STRIP = {"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT",
-              "CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING",
-              "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING"}
+    # Strip env vars that reroute Claude CLI away from the user's OAuth subscription:
+    # - CLAUDECODE                → nested-session guard (blocks launch entirely)
+    # - CLAUDE_CODE_ENTRYPOINT    → routes to VS Code extension billing
+    # - CLAUDE_CODE_ENABLE_*      → extension-only feature flags
+    # - ANTHROPIC_API_KEY         → switches to API-key billing (separate credits)
+    _STRIP = {
+        "CLAUDECODE",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING",
+        "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING",
+        "ANTHROPIC_API_KEY",
+    }
+    stripped = [k for k in _STRIP if k in os.environ]
+    if stripped:
+        _print_step(f"Stripped env vars before claude call: {', '.join(stripped)}")
     env = {k: v for k, v in os.environ.items() if k not in _STRIP}
 
     result = subprocess.run(
@@ -392,18 +398,48 @@ def _generate_code(
         True if source files were generated, False otherwise.
     """
     if model_provider == "claude":
+        # ------------------------------------------------------------------
+        # Architecture pass: agent reads spec and writes PLAN.md
+        # ------------------------------------------------------------------
         if plan:
             plan.start("plan_code")
-            plan.complete("plan_code", "delegated to Claude agent")
+
+        arch_task = (
+            f"Plan the architecture for the '{package_name}' package.\n"
+            "1. Read spec.md for the full project requirements.\n"
+            "2. Read CLAUDE.md for coding conventions and constraints.\n"
+            "3. Think carefully about the module structure, classes, interfaces, and data flow.\n"
+            f"4. Write your architecture plan to PLAN.md in the project root.\n"
+            "   Include: module layout, key classes/functions, data flow, and any dependencies needed.\n"
+            "5. Do NOT write any source code — planning only."
+        )
+        _print_step("Architecture pass: planning with Claude agent...")
+        plan_success = _run_claude_agent(
+            arch_task, project_path, model=model, max_turns=max_turns,
+            skip_permissions=skip_permissions,
+        )
+
+        if plan:
+            if plan_success:
+                plan.complete("plan_code", "PLAN.md written by agent")
+            else:
+                plan.fail("plan_code", "agent returned non-zero exit code")
+                return False
+
+        # ------------------------------------------------------------------
+        # Code generation pass: agent reads PLAN.md and implements
+        # ------------------------------------------------------------------
+        if plan:
             plan.start("generate_code")
 
         task = (
             f"Generate Python source code for the '{package_name}' package.\n"
-            "1. Read spec.md for the full project requirements.\n"
-            "2. Read CLAUDE.md for coding conventions and constraints.\n"
-            f"3. Create all source files in src/{package_name}/\n"
-            "4. Use 'uv add <pkg>' for any missing packages.\n"
-            "5. When done run: uv run ruff check . --fix && uv run ruff format .\n"
+            "1. Read PLAN.md for the architecture plan.\n"
+            "2. Read spec.md for the full project requirements.\n"
+            "3. Read CLAUDE.md for coding conventions and constraints.\n"
+            f"4. Implement all source files in src/{package_name}/ following the plan exactly.\n"
+            "5. Use 'uv add <pkg>' for any missing packages.\n"
+            "6. When done run: uv run ruff check . --fix && uv run ruff format .\n"
             "Do NOT generate tests — only source code."
         )
         _print_step("Generating source code with Claude agent...")

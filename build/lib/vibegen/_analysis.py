@@ -28,7 +28,7 @@ def _parse_spec(path: Path) -> dict[str, Any]:
         Dict with keys: project_name, python_version, dependencies,
         doc_files, usage, description, raw.
     """
-    text = path.read_text(encoding="utf-8")
+    text = path.read_text(encoding="utf-8-sig")  # utf-8-sig strips BOM if present
     lines = text.splitlines()
 
     def _extract_section(header: str, default: str = "") -> str:
