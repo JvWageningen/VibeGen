@@ -331,9 +331,16 @@ def _run_claude_agent(
     else:
         cmd.extend(["--allowedTools", "Read", "Write", "Edit", "Bash", "Glob", "Grep"])
 
-    # Strip CLAUDECODE so the child process is not blocked by the nested-session
-    # guard (Claude Code sets this in the parent environment).
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+    # Strip VS Code extension env vars so the child claude process uses the
+    # user's standalone auth (claude auth login) rather than the extension's
+    # separate billing account.
+    # - CLAUDECODE          → nested-session guard (blocks launch entirely)
+    # - CLAUDE_CODE_ENTRYPOINT=claude-vscode → routes to extension billing
+    # - CLAUDE_CODE_ENABLE_* → extension-only feature flags
+    _STRIP = {"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT",
+              "CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING",
+              "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING"}
+    env = {k: v for k, v in os.environ.items() if k not in _STRIP}
 
     result = subprocess.run(
         cmd,
