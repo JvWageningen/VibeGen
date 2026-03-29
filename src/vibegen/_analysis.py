@@ -12,6 +12,27 @@ from typing import Any
 # Standard-library module names (Python 3.10+); used to identify external deps.
 _STDLIB: frozenset[str] = sys.stdlib_module_names
 
+# File extensions recognised as documentation references in spec files.
+_DOC_EXTENSIONS: frozenset[str] = frozenset(
+    {".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".rst", ".pdf", ".html"}
+)
+
+
+def _is_path_like(text: str) -> bool:
+    """Return True if *text* looks like a file or directory path.
+
+    Args:
+        text: Candidate string extracted from a spec section.
+
+    Returns:
+        True when the string resembles a relative path (contains a ``/`` or
+        has a recognised documentation extension).
+    """
+    if not text or " " in text.strip():
+        return False
+    p = Path(text.strip().rstrip("/"))
+    return "/" in text or p.suffix.lower() in _DOC_EXTENSIONS
+
 
 # ---------------------------------------------------------------------------
 # Spec parsing
@@ -49,16 +70,40 @@ def _parse_spec(path: Path) -> dict[str, Any]:
     dependencies = _extract_section("## Dependencies", "").strip()
     description = _extract_section("## Description", "").strip()
 
-    # Extract doc file references <!-- docs/... -->
+    # Extract doc file/folder references from the ## Documentation section.
+    # Supports HTML comments (<!-- path -->), markdown list items (- path),
+    # and bare path lines.
     doc_files: list[str] = []
+    in_doc_section = False
     for line in lines:
-        if "<!--" in line and "docs/" in line and "-->" in line:
+        if line.startswith("## Documentation"):
+            in_doc_section = True
+            continue
+        if in_doc_section and line.startswith("## "):
+            break
+        if not in_doc_section:
+            continue
+        # HTML comment: <!-- path  — optional description -->
+        if "<!--" in line and "-->" in line:
             start = line.find("<!--")
             end = line.find("-->", start)
             if start >= 0 and end >= 0:
                 comment = line[start + 4 : end].strip()
-                if comment.startswith("docs/"):
-                    doc_files.append(comment)
+                # Strip trailing description after whitespace
+                candidate = comment.split()[0] if comment else ""
+                if _is_path_like(candidate):
+                    doc_files.append(candidate)
+            continue
+        # Markdown list item: - path/to/file
+        stripped = line.strip()
+        if stripped.startswith("- "):
+            candidate = stripped[2:].strip()
+            if _is_path_like(candidate):
+                doc_files.append(candidate)
+            continue
+        # Bare path line
+        if stripped and _is_path_like(stripped):
+            doc_files.append(stripped)
 
     usage = _extract_section("## Usage")
     if not usage:
