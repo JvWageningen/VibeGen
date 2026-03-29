@@ -76,15 +76,31 @@ def test_parse_spec_raw(basic_spec: Path) -> None:
 
 
 def test_parse_spec_doc_files(tmp_path: Path) -> None:
-    content = "## Name\nFoo\n<!-- docs/api.md -->\n"
+    content = "## Name\nFoo\n## Documentation\n<!-- docs/api.md -->\n"
     spec = tmp_path / "spec.md"
     spec.write_text(content, encoding="utf-8")
     result = _parse_spec(spec)
     assert "docs/api.md" in result["doc_files"]
 
 
+def test_parse_spec_doc_files_outside_section(tmp_path: Path) -> None:
+    content = "## Name\nFoo\n<!-- docs/api.md -->\n"
+    spec = tmp_path / "spec.md"
+    spec.write_text(content, encoding="utf-8")
+    result = _parse_spec(spec)
+    assert result["doc_files"] == []
+
+
+def test_parse_spec_doc_files_list_item(tmp_path: Path) -> None:
+    content = "## Name\nFoo\n## Documentation\n- user_data/\n"
+    spec = tmp_path / "spec.md"
+    spec.write_text(content, encoding="utf-8")
+    result = _parse_spec(spec)
+    assert "user_data/" in result["doc_files"]
+
+
 def test_parse_spec_doc_files_no_match(tmp_path: Path) -> None:
-    content = "## Name\nFoo\n<!-- images/logo.png -->\n"
+    content = "## Name\nFoo\n## Documentation\n<!-- just a plain comment -->\n"
     spec = tmp_path / "spec.md"
     spec.write_text(content, encoding="utf-8")
     result = _parse_spec(spec)
