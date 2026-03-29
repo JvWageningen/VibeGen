@@ -34,6 +34,21 @@ Cross-platform Python project generator powered by Claude Code.
 - snake_case for files, modules, functions, variables
 - PascalCase for classes
 - UPPER_SNAKE_CASE for constants
+- Prefix internal/private modules and functions with `_` (e.g. `_pipeline.py`, `_run_cmd`)
+- Add `from __future__ import annotations` at the top of every module
+- Use `# noqa: BLE001` on broad `except Exception` catches where intentional
+- All console output goes through `_print_step`, `_print_ok`, `_print_warn`, `_print_err`
+- All subprocess calls go through `_run_cmd()` (supports transparent Docker sandbox)
+
+## Commit Message Style
+
+Follow Conventional Commits:
+
+- `feat:` new feature
+- `fix:` bug fix
+- `chore:` maintenance (scaffold, config, tooling)
+- `test:` test changes
+- `docs:` documentation only
 
 ## Verification
 After any code change, always:
