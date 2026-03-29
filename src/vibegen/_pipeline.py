@@ -15,7 +15,13 @@ from ._analysis import (
     _read_source_files,
 )
 from ._io import _print_ok, _print_step, _print_warn, _run_cmd, _write_file
-from ._llm import _load_prompt_template, _render_template, _run_llm, _run_llm_role
+from ._llm import (
+    _load_prompt_template,
+    _render_template,
+    _run_claude_session,
+    _run_llm,
+    _run_llm_role,
+)
 from ._output_parser import _parse_generated_files, _write_generated_files
 from .sandbox import SandboxConfig
 from .web_search import web_search
@@ -221,8 +227,12 @@ def _fix_code_errors_with_llm(
     show_output: bool = False,
     web_context: str = "",
     sandbox: SandboxConfig | None = None,
-) -> None:
+    session_id: str = "",
+) -> str:
     """Use the LLM to fix non-auto-fixable ruff errors in the given paths.
+
+    When *session_id* is provided and the provider is ``claude``, the
+    existing session is resumed so Claude retains full project context.
 
     Args:
         project_path: Project root directory.
@@ -233,29 +243,59 @@ def _fix_code_errors_with_llm(
         show_output: Print LLM output when True.
         web_context: Optional web-search results to prepend to the prompt.
         sandbox: Optional Docker sandbox config.
-    """
-    fix_template = _load_prompt_template("fix_errors")
-    if not fix_template:
-        _print_warn("fix_errors template not found — skipping LLM error fixing.")
-        return
+        session_id: Claude session ID to resume.
 
+    Returns:
+        The (possibly updated) session ID.
+    """
     errors_by_file = _get_ruff_errors_by_file(
         project_path, check_paths, sandbox=sandbox
     )
     if not errors_by_file:
-        return
+        return session_id
 
     total = sum(len(v) for v in errors_by_file.values())
     _print_step(f"Fixing {total} non-auto-fixable error(s) with LLM...")
+
+    # Claude session path: ask Claude to fix all errors in one turn
+    if model_provider == "claude" and session_id:
+        error_summary = "\n".join(
+            f"{path}: {'; '.join(errs)}" for path, errs in errors_by_file.items()
+        )
+        _, session_id = _run_claude_session(
+            prompt=(
+                "Fix these ruff lint errors in the project:\n\n"
+                f"{error_summary}\n\n"
+                "Read the files, fix the errors, and run "
+                "ruff again to verify."
+            ),
+            model=model,
+            cwd=project_path,
+            permission_mode="acceptEdits",
+            effort="high",
+            resume_session=session_id,
+            show_output=show_output,
+        )
+        return session_id
+
+    # Ollama / no-session fallback: fix file-by-file
+    fix_template = _load_prompt_template("fix_errors")
+    if not fix_template:
+        _print_warn("fix_errors template not found — skipping.")
+        return session_id
 
     for rel_path, file_errors in errors_by_file.items():
         full_path = project_path / rel_path
         if not full_path.exists():
             continue
 
-        # Build focused error context (±10 lines around each error).
         ctx_blocks = [
-            _build_error_context(project_path, rel_path, err, web_context)
+            _build_error_context(
+                project_path,
+                rel_path,
+                err,
+                web_context,
+            )
             for err in file_errors
         ]
         error_context_str = "\n\n".join(c.render() for c in ctx_blocks)
@@ -265,7 +305,9 @@ def _fix_code_errors_with_llm(
             {
                 "web_context": web_context,
                 "file_path": rel_path,
-                "file_content": full_path.read_text(encoding="utf-8"),
+                "file_content": full_path.read_text(
+                    encoding="utf-8",
+                ),
                 "errors": "\n".join(file_errors),
                 "installed_deps": installed_deps,
                 "error_context": error_context_str,
@@ -273,9 +315,14 @@ def _fix_code_errors_with_llm(
         )
 
         _print_step(f"Fixing {rel_path}...")
-        fixed = _run_llm(prompt, model_provider, model, show_output=show_output)
+        fixed = _run_llm(
+            prompt,
+            model_provider,
+            model,
+            show_output=show_output,
+        )
         if not fixed.strip():
-            _print_warn(f"LLM returned empty output for {rel_path}. Skipping.")
+            _print_warn(f"LLM returned empty for {rel_path}. Skipping.")
             continue
 
         fixed_lines = fixed.splitlines()
@@ -286,6 +333,8 @@ def _fix_code_errors_with_llm(
 
         _write_file(full_path, "\n".join(fixed_lines))
         _print_ok(f"Fixed: {rel_path}")
+
+    return session_id
 
 
 # ---------------------------------------------------------------------------
@@ -302,8 +351,12 @@ def _generate_code(
     show_output: bool = False,
     sandbox: SandboxConfig | None = None,
     plan: TaskPlan | None = None,
-) -> bool:
-    """Generate source code with LLM, then auto-fix and LLM-fix remaining errors.
+) -> bool | str:
+    """Generate source code with LLM, then auto-fix remaining errors.
+
+    For the ``claude`` provider this uses a session-based workflow:
+    plan mode (read-only) followed by acceptEdits mode (writes files
+    directly).  For ``ollama`` the legacy text-parsing path is used.
 
     Args:
         project_path: Project root directory.
@@ -316,7 +369,245 @@ def _generate_code(
         plan: Optional TaskPlan for progress tracking.
 
     Returns:
-        True if source files were generated, False otherwise.
+        For ``claude``: the session ID (truthy str) on success.
+        For ``ollama``: True on success.
+        False on failure.
+    """
+    installed_deps = _get_pyproject_deps(project_path)
+    constraints = (
+        "- Use type hints on every function signature.\n"
+        "- Use Google-style docstrings on public functions "
+        "and classes.\n"
+        "- Use Pydantic models for any structured data.\n"
+        "- Use loguru for logging (never print()).\n"
+        "- Handle all edge cases mentioned in the spec.\n"
+        "- Keep functions focused and under 30 lines.\n"
+        f"- Use absolute imports: from {package_name}.module "
+        "import ...\n"
+        "- Add any required packages to pyproject.toml "
+        "dependencies before importing them."
+    )
+
+    if model_provider == "claude":
+        result = _generate_code_claude(
+            project_path,
+            spec,
+            package_name,
+            model,
+            constraints,
+            installed_deps,
+            show_output=show_output,
+            sandbox=sandbox,
+            plan=plan,
+        )
+    else:
+        result = _generate_code_ollama(
+            project_path,
+            spec,
+            package_name,
+            model_provider,
+            model,
+            constraints,
+            installed_deps,
+            show_output=show_output,
+            sandbox=sandbox,
+            plan=plan,
+        )
+
+    if not result:
+        return False
+
+    src_dir = project_path / "src" / package_name
+
+    # Post-processing: auto-fix with ruff
+    if plan:
+        plan.start("fix_code_ruff")
+    _print_step("Formatting generated code...")
+    _format_code(project_path, sandbox=sandbox)
+    if plan:
+        plan.complete("fix_code_ruff")
+
+    # LLM-fix non-auto-fixable ruff errors in src/
+    if plan:
+        plan.start("fix_code_llm")
+    session_id = isinstance(result, str) and result or ""
+    session_id = _fix_code_errors_with_llm(
+        project_path,
+        ["src/"],
+        installed_deps,
+        model_provider,
+        model,
+        show_output,
+        sandbox=sandbox,
+        session_id=session_id,
+    )
+    if plan:
+        plan.complete("fix_code_llm")
+
+    # Update result with potentially refreshed session_id
+    if isinstance(result, str) and session_id:
+        result = session_id
+
+    # Install missing packages
+    installed_deps = _install_missing_deps(
+        project_path,
+        src_dir,
+        package_name,
+        installed_deps,
+        sandbox=sandbox,
+    )
+
+    # Re-format after all edits
+    _format_code(project_path, sandbox=sandbox)
+
+    try:
+        _run_cmd(
+            ["git", "add", "-A"],
+            cwd=project_path,
+            check=False,
+        )
+        _run_cmd(
+            [
+                "git",
+                "commit",
+                "-q",
+                "-m",
+                "feat: generate source code from spec",
+            ],
+            cwd=project_path,
+            check=False,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+    return result
+
+
+def _generate_code_claude(
+    project_path: Path,
+    spec: dict[str, Any],
+    package_name: str,
+    model: str,
+    constraints: str,
+    installed_deps: str,
+    show_output: bool = False,
+    sandbox: SandboxConfig | None = None,
+    plan: TaskPlan | None = None,
+) -> str:
+    """Generate code via Claude Code session (plan → execute).
+
+    Args:
+        project_path: Project root directory.
+        spec: Parsed spec dict.
+        package_name: Python package name.
+        model: Claude model identifier.
+        constraints: Code constraints string.
+        installed_deps: Installed dependencies string.
+        show_output: Print LLM output when True.
+        sandbox: Optional Docker sandbox config.
+        plan: Optional TaskPlan for progress tracking.
+
+    Returns:
+        Session ID on success, empty string on failure.
+    """
+    if plan:
+        plan.start("plan_code")
+
+    code_prompt = (
+        "Implement this Python project from the spec below.\n\n"
+        "WORKFLOW:\n"
+        "1. First, read the existing project structure and "
+        "pyproject.toml.\n"
+        "2. Plan your implementation: decide which modules to "
+        f"create under src/{package_name}/, their public "
+        "APIs, Pydantic models, and dependencies.\n"
+        "3. Then create ALL source files with complete, "
+        "working implementation code.\n"
+        "4. You MAY add required dependencies to "
+        "pyproject.toml.\n"
+        "5. Run ruff to check and fix your code.\n\n"
+        f"SPECIFICATION:\n{spec['raw']}\n\n"
+        f"PACKAGE NAME: {package_name}\n\n"
+        f"CONSTRAINTS:\n{constraints}\n\n"
+        "These files already exist and were generated by "
+        "the scaffold. Do NOT recreate them from scratch, "
+        "but you MAY add to or extend them as needed:\n"
+        "- CLAUDE.md — add project-specific notes\n"
+        "- .claude/ — add settings or commands\n"
+        "- .vscode/settings.json — add project settings\n"
+        "- .gitignore — add project-specific patterns\n"
+        "- .pre-commit-config.yaml — add hooks\n"
+        "- .github/workflows/ci.yml — add steps\n"
+        "- README.md — add usage details\n"
+        "- tests/conftest.py — add shared fixtures\n\n"
+        "Do NOT ask questions. Use your best judgment "
+        "and proceed with the full implementation."
+    )
+
+    _print_step("Generating code with Claude (plan + execute)...")
+    if plan:
+        plan.complete("plan_code")
+        plan.start("generate_code")
+
+    code_result, session_id = _run_claude_session(
+        prompt=code_prompt,
+        model=model,
+        cwd=project_path,
+        permission_mode="acceptEdits",
+        effort="high",
+        show_output=show_output,
+        max_turns=100,
+    )
+    _write_file(
+        project_path / "MODEL_OUTPUT_code.txt",
+        code_result,
+    )
+
+    # Verify files were actually created
+    src_dir = project_path / "src" / package_name
+    py_files = [f for f in src_dir.rglob("*.py") if f.name != "__init__.py"]
+    if not py_files:
+        _print_warn("Claude did not create any source files.")
+        if plan:
+            plan.fail("generate_code", "no files created")
+        return ""
+
+    count = len(py_files)
+    _print_ok(f"Claude created {count} source modules")
+    if plan:
+        plan.complete("generate_code", f"{count} files")
+
+    return session_id
+
+
+def _generate_code_ollama(
+    project_path: Path,
+    spec: dict[str, Any],
+    package_name: str,
+    model_provider: str,
+    model: str,
+    constraints: str,
+    installed_deps: str,
+    show_output: bool = False,
+    sandbox: SandboxConfig | None = None,
+    plan: TaskPlan | None = None,
+) -> bool:
+    """Generate code via Ollama (legacy text-parsing path).
+
+    Args:
+        project_path: Project root directory.
+        spec: Parsed spec dict.
+        package_name: Python package name.
+        model_provider: LLM provider string.
+        model: Model identifier.
+        constraints: Code constraints string.
+        installed_deps: Installed dependencies string.
+        show_output: Print LLM output when True.
+        sandbox: Optional Docker sandbox config.
+        plan: Optional TaskPlan for progress tracking.
+
+    Returns:
+        True on success, False on failure.
     """
     if plan:
         plan.start("plan_code")
@@ -332,18 +623,6 @@ def _generate_code(
         return False
 
     repo_tree = _get_repo_tree(project_path)
-    installed_deps = _get_pyproject_deps(project_path)
-    constraints = (
-        "- Use type hints on every function signature.\n"
-        "- Use Google-style docstrings on public functions and classes.\n"
-        "- Use Pydantic models for any structured data.\n"
-        "- Use loguru for logging (never print()).\n"
-        "- Handle all edge cases mentioned in the spec.\n"
-        "- Keep functions focused and under 30 lines.\n"
-        f"- Use absolute imports: from {package_name}.module import ...\n"
-        "- Only use packages already listed in pyproject.toml dependencies.\n"
-        "- Do NOT modify pyproject.toml."
-    )
 
     plan_prompt = _render_template(
         plan_template,
@@ -356,8 +635,16 @@ def _generate_code(
     )
 
     _print_step("Planning with LLM...")
-    plan_output = _run_llm(plan_prompt, model_provider, model, show_output=show_output)
-    _write_file(project_path / "MODEL_OUTPUT_plan.txt", plan_output)
+    plan_output = _run_llm(
+        plan_prompt,
+        model_provider,
+        model,
+        show_output=show_output,
+    )
+    _write_file(
+        project_path / "MODEL_OUTPUT_plan.txt",
+        plan_output,
+    )
     if plan:
         plan.complete("plan_code")
 
@@ -374,16 +661,35 @@ def _generate_code(
 
     if plan:
         plan.start("generate_code")
-    _print_step("Generating source code with LLM...")
-    code_output = _run_llm(code_prompt, model_provider, model, show_output=show_output)
-    _write_file(project_path / "MODEL_OUTPUT_code.txt", code_output)
 
-    generated = _parse_generated_files(code_output)
-    if not generated:
-        _print_warn("No files were generated by LLM.")
-        _print_warn(
-            f"Raw output saved to MODEL_OUTPUT_code.txt ({len(code_output)} chars)"
+    max_code_attempts = 3
+    generated: dict[str, str] = {}
+    for attempt in range(1, max_code_attempts + 1):
+        msg = (
+            f"Generating source code with LLM "
+            f"(attempt {attempt}/{max_code_attempts})..."
         )
+        _print_step(msg)
+        code_output = _run_llm(
+            code_prompt,
+            model_provider,
+            model,
+            show_output=show_output,
+        )
+        _write_file(
+            project_path / "MODEL_OUTPUT_code.txt",
+            code_output,
+        )
+
+        generated = _parse_generated_files(code_output)
+        if generated:
+            break
+        _print_warn(
+            f"Attempt {attempt}: no parseable file blocks ({len(code_output)} chars)."
+        )
+
+    if not generated:
+        _print_warn("No files generated after all attempts.")
         if plan:
             plan.fail("generate_code", "LLM returned no files")
         return False
@@ -391,53 +697,6 @@ def _generate_code(
     count = _write_generated_files(project_path, generated)
     if plan:
         plan.complete("generate_code", f"{count} files")
-
-    src_dir = project_path / "src" / package_name
-
-    # Pass 1: auto-fix with ruff
-    if plan:
-        plan.start("fix_code_ruff")
-    _print_step("Formatting generated code...")
-    _format_code(project_path, sandbox=sandbox)
-    if plan:
-        plan.complete("fix_code_ruff")
-
-    # Pass 2: LLM-fix non-auto-fixable ruff errors in src/
-    if plan:
-        plan.start("fix_code_llm")
-    _fix_code_errors_with_llm(
-        project_path,
-        ["src/"],
-        installed_deps,
-        model_provider,
-        model,
-        show_output,
-        sandbox=sandbox,
-    )
-    if plan:
-        plan.complete("fix_code_llm")
-
-    # Pass 3: install missing packages (ruff can't detect these)
-    installed_deps = _install_missing_deps(
-        project_path,
-        src_dir,
-        package_name,
-        installed_deps,
-        sandbox=sandbox,
-    )
-
-    # Pass 4: re-format after all edits
-    _format_code(project_path, sandbox=sandbox)
-
-    try:
-        _run_cmd(["git", "add", "-A"], cwd=project_path, check=False)
-        _run_cmd(
-            ["git", "commit", "-q", "-m", "feat: generate source code from spec"],
-            cwd=project_path,
-            check=False,
-        )
-    except Exception:  # noqa: BLE001
-        pass
 
     return True
 
@@ -639,8 +898,7 @@ def _fix_pytest_failures_with_llm(
 
         test_content = full_path.read_text(encoding="utf-8")
         source = (
-            f"{source_context}\n\n"
-            f"=== {rel_path} (TEST FILE TO FIX) ===\n{test_content}"
+            f"{source_context}\n\n=== {rel_path} (TEST FILE TO FIX) ===\n{test_content}"
         )
         error_log = f"{web_context}\n\n{error_block}" if web_context else error_block
 
@@ -655,9 +913,7 @@ def _fix_pytest_failures_with_llm(
         )
 
         _print_step(f"Fixing failing tests in {rel_path}...")
-        fixed_output = _run_llm(
-            prompt, model_provider, model, show_output=show_output
-        )
+        fixed_output = _run_llm(prompt, model_provider, model, show_output=show_output)
 
         if not fixed_output.strip():
             _print_warn(f"LLM returned empty output for {rel_path}. Skipping.")
@@ -687,12 +943,12 @@ def _run_reviewer_pass(
     model_provider: str,
     model: str,
     show_output: bool = False,
+    session_id: str = "",
 ) -> list[str]:
     """Run a spec-compliance review of the generated source code.
 
-    Uses the ``reviewer`` role prompt to check every spec requirement against
-    the generated implementation.  Returns a list of ``MISSING:`` lines, or
-    an empty list when the spec is satisfied.
+    When *session_id* is provided and the provider is ``claude``, the
+    existing session is resumed so Claude has full project context.
 
     Args:
         project_path: Project root directory.
@@ -701,30 +957,58 @@ def _run_reviewer_pass(
         model_provider: ``"claude"`` or ``"ollama"``.
         model: Model identifier.
         show_output: Print LLM output when True.
+        session_id: Claude session ID to resume.
 
     Returns:
         List of unmet-requirement strings (``"MISSING: ..."``), or ``[]``.
     """
-    reviewer_template = _load_prompt_template("reviewer")
-    if not reviewer_template:
-        _print_warn("reviewer template not found — skipping spec compliance check.")
-        return []
-
-    src_dir = project_path / "src" / package_name
-    source_context = _read_source_files(src_dir, project_path)
-
-    prompt = _render_template(
-        reviewer_template,
-        {
-            "spec": spec["raw"],
-            "source": source_context,
-        },
-    )
-
     _print_step("Running spec compliance review...")
-    response = _run_llm_role(
-        "reviewer", prompt, model_provider, model, show_output=show_output
-    )
+
+    if model_provider == "claude" and session_id:
+        response, _ = _run_claude_session(
+            prompt=(
+                "Review the implementation against the spec. "
+                "For each requirement in the spec, check if "
+                "it is implemented. Reply with either "
+                "SPEC_SATISFIED if everything is covered, or "
+                "list each missing item as "
+                "'MISSING: <requirement>'.\n\n"
+                f"SPEC:\n{spec['raw']}"
+            ),
+            model=model,
+            cwd=project_path,
+            permission_mode="plan",
+            effort="high",
+            resume_session=session_id,
+            show_output=show_output,
+        )
+    else:
+        reviewer_template = _load_prompt_template("reviewer")
+        if not reviewer_template:
+            _print_warn("reviewer template not found — skipping.")
+            return []
+
+        src_dir = project_path / "src" / package_name
+        source_context = _read_source_files(
+            src_dir,
+            project_path,
+        )
+
+        prompt = _render_template(
+            reviewer_template,
+            {
+                "spec": spec["raw"],
+                "source": source_context,
+            },
+        )
+
+        response = _run_llm_role(
+            "reviewer",
+            prompt,
+            model_provider,
+            model,
+            show_output=show_output,
+        )
 
     if "SPEC_SATISFIED" in response:
         _print_ok("Spec compliance check passed")
@@ -743,60 +1027,112 @@ def _run_reviewer_pass(
     return missing
 
 
-def _generate_and_fix_tests(
+def _generate_tests_claude(
     project_path: Path,
     spec: dict[str, Any],
     package_name: str,
-    model_provider: str,
     model: str,
-    max_fix_attempts: int = 3,
+    installed_deps: str,
+    session_id: str,
     show_output: bool = False,
-    sandbox: SandboxConfig | None = None,
     plan: TaskPlan | None = None,
-) -> bool:
-    """Plan tests from actual source, generate them, fix errors, then run pytest.
+) -> None:
+    """Generate tests via Claude session (plan → execute).
+
+    Resumes the existing code-generation session so Claude has
+    full context of what it built.
 
     Args:
         project_path: Project root directory.
         spec: Parsed spec dict.
         package_name: Python package name.
-        model_provider: ``"claude"`` or ``"ollama"``.
-        model: Model identifier.
-        max_fix_attempts: Number of test-fix retry cycles.
+        model: Claude model identifier.
+        installed_deps: Installed dependencies string.
+        session_id: Claude session ID to resume.
         show_output: Print LLM output when True.
-        sandbox: Optional Docker sandbox config.
         plan: Optional TaskPlan for progress tracking.
+    """
+    if plan:
+        plan.start("plan_tests")
+        plan.complete("plan_tests")
+        plan.start("generate_tests")
 
-    Returns:
-        True (always; failures are reported via warnings).
+    _print_step("Generating tests with Claude (plan + execute)...")
+    test_result, _ = _run_claude_session(
+        prompt=(
+            "Now write a comprehensive pytest test suite for "
+            "the modules you just created.\n\n"
+            "WORKFLOW:\n"
+            "1. First, read the source files you created.\n"
+            "2. Plan test coverage: normal cases, edge cases, "
+            "and error paths for each module.\n"
+            "3. Then create ALL test files under tests/.\n\n"
+            f"Tests must import from {package_name}.module, "
+            "never from src/.\n"
+            f"Only use packages in: {installed_deps}\n\n"
+            "tests/conftest.py already exists with shared "
+            "fixtures — add to it if needed, don't overwrite.\n"
+            "Do NOT ask questions. Write all test files now."
+        ),
+        model=model,
+        cwd=project_path,
+        permission_mode="acceptEdits",
+        effort="high",
+        resume_session=session_id,
+        show_output=show_output,
+        max_turns=100,
+    )
+    _write_file(
+        project_path / "MODEL_OUTPUT_tests.txt",
+        test_result,
+    )
+
+    tests_dir = project_path / "tests"
+    test_files = list(tests_dir.rglob("test_*.py")) if tests_dir.exists() else []
+    count = len(test_files)
+    _print_ok(f"Claude created {count} test files")
+    if plan:
+        plan.complete("generate_tests", f"{count} files")
+
+
+def _generate_tests_ollama(
+    project_path: Path,
+    spec: dict[str, Any],
+    package_name: str,
+    modules: list[Path],
+    installed_deps: str,
+    model_provider: str,
+    model: str,
+    show_output: bool = False,
+    plan: TaskPlan | None = None,
+) -> None:
+    """Generate tests via Ollama (legacy text-parsing path).
+
+    Args:
+        project_path: Project root directory.
+        spec: Parsed spec dict.
+        package_name: Python package name.
+        modules: List of source module paths.
+        installed_deps: Installed dependencies string.
+        model_provider: LLM provider string.
+        model: Model identifier.
+        show_output: Print LLM output when True.
+        plan: Optional TaskPlan for progress tracking.
     """
     test_template = _load_prompt_template("write_tests")
     if not test_template:
-        _print_warn("Test template not found. Skipping test generation.")
+        _print_warn("Test template not found. Skipping.")
         if plan:
             plan.skip("plan_tests", "template not found")
             plan.skip("generate_tests", "template not found")
-        return True
+        return
 
     src_dir = project_path / "src" / package_name
-    if not src_dir.exists():
-        _print_warn("No source directory found.")
-        if plan:
-            plan.skip("plan_tests", "no source dir")
-            plan.skip("generate_tests", "no source dir")
-        return True
-
-    modules = [f for f in src_dir.rglob("*.py") if f.name != "__init__.py"]
-    if not modules:
-        _print_warn("No source modules found to test.")
-        if plan:
-            plan.skip("plan_tests", "no source modules")
-            plan.skip("generate_tests", "no source modules")
-        return True
-
     source_files = _read_source_files(src_dir, project_path)
-    dependency_graph = _build_dependency_graph(src_dir, package_name)
-    installed_deps = _get_pyproject_deps(project_path)
+    dependency_graph = _build_dependency_graph(
+        src_dir,
+        package_name,
+    )
 
     if plan:
         plan.start("plan_tests")
@@ -841,12 +1177,90 @@ def _generate_and_fix_tests(
             },
         )
         test_output = _run_llm(
-            test_prompt, model_provider, model, show_output=show_output
+            test_prompt,
+            model_provider,
+            model,
+            show_output=show_output,
         )
         generated = _parse_generated_files(test_output)
         _write_generated_files(project_path, generated)
 
     _print_ok("Tests generated")
+    if plan:
+        plan.complete("generate_tests", f"{len(modules)} modules")
+
+
+def _generate_and_fix_tests(
+    project_path: Path,
+    spec: dict[str, Any],
+    package_name: str,
+    model_provider: str,
+    model: str,
+    max_fix_attempts: int = 3,
+    show_output: bool = False,
+    sandbox: SandboxConfig | None = None,
+    plan: TaskPlan | None = None,
+    session_id: str = "",
+) -> bool:
+    """Plan tests from actual source, generate them, fix errors, then run pytest.
+
+    Args:
+        project_path: Project root directory.
+        spec: Parsed spec dict.
+        package_name: Python package name.
+        model_provider: ``"claude"`` or ``"ollama"``.
+        model: Model identifier.
+        max_fix_attempts: Number of test-fix retry cycles.
+        show_output: Print LLM output when True.
+        sandbox: Optional Docker sandbox config.
+        plan: Optional TaskPlan for progress tracking.
+        session_id: Claude session ID to resume (Claude provider only).
+
+    Returns:
+        True (always; failures are reported via warnings).
+    """
+    src_dir = project_path / "src" / package_name
+    if not src_dir.exists():
+        _print_warn("No source directory found.")
+        if plan:
+            plan.skip("plan_tests", "no source dir")
+            plan.skip("generate_tests", "no source dir")
+        return True
+
+    modules = [f for f in src_dir.rglob("*.py") if f.name != "__init__.py"]
+    if not modules:
+        _print_warn("No source modules found to test.")
+        if plan:
+            plan.skip("plan_tests", "no source modules")
+            plan.skip("generate_tests", "no source modules")
+        return True
+
+    installed_deps = _get_pyproject_deps(project_path)
+
+    if model_provider == "claude" and session_id:
+        _generate_tests_claude(
+            project_path,
+            spec,
+            package_name,
+            model,
+            installed_deps,
+            session_id,
+            show_output=show_output,
+            plan=plan,
+        )
+    else:
+        _generate_tests_ollama(
+            project_path,
+            spec,
+            package_name,
+            modules,
+            installed_deps,
+            model_provider,
+            model,
+            show_output=show_output,
+            plan=plan,
+        )
+
     _relocate_test_files(project_path)
     if plan:
         plan.complete("generate_tests", f"{len(modules)} modules")
@@ -859,7 +1273,7 @@ def _generate_and_fix_tests(
     _format_code(project_path, sandbox=sandbox)
 
     # Pass 2: LLM-fix non-auto-fixable ruff errors in tests/
-    _fix_code_errors_with_llm(
+    session_id = _fix_code_errors_with_llm(
         project_path,
         ["tests/"],
         installed_deps,
@@ -867,6 +1281,7 @@ def _generate_and_fix_tests(
         model,
         show_output,
         sandbox=sandbox,
+        session_id=session_id,
     )
     if plan:
         plan.complete("fix_tests_ruff")
@@ -895,23 +1310,34 @@ def _generate_and_fix_tests(
                 plan.skip("fix_test_failures", "not needed")
             _print_ok("All tests passing!")
 
-            # Reviewer pass: check spec compliance after tests pass.
+            # Reviewer pass
             if plan:
                 plan.start("reviewer")
             missing = _run_reviewer_pass(
-                project_path, spec, package_name, model_provider, model, show_output
+                project_path,
+                spec,
+                package_name,
+                model_provider,
+                model,
+                show_output,
+                session_id=session_id,
             )
             if plan:
                 if missing:
-                    plan.fail("reviewer", f"{len(missing)} requirement(s) missing")
+                    plan.fail(
+                        "reviewer",
+                        f"{len(missing)} requirement(s) missing",
+                    )
                 else:
                     plan.complete("reviewer")
             break
         if attempt >= max_fix_attempts:
             if plan:
-                plan.fail("run_tests" if attempt == 1 else "fix_test_failures",
-                          "max attempts reached")
-            _print_warn("Max attempts reached. Some tests may still be failing.")
+                plan.fail(
+                    "run_tests" if attempt == 1 else "fix_test_failures",
+                    "max attempts reached",
+                )
+            _print_warn("Max attempts reached. Tests may still fail.")
             print(output[-500:] if len(output) > 500 else output)
             break
         if plan and attempt == 1:
@@ -919,7 +1345,7 @@ def _generate_and_fix_tests(
             plan.start("fix_test_failures")
         _print_warn("Tests failing. Attempting to fix...")
 
-        # From the 2nd failed attempt onwards, enrich context with a web search.
+        # Web search for error context on 2nd+ attempt
         web_ctx = ""
         if attempt >= 2:
             first_error = next(
@@ -928,7 +1354,12 @@ def _generate_and_fix_tests(
                     for line in output.splitlines()
                     if any(
                         tag in line
-                        for tag in ("ERROR", "error:", "Exception", "AssertionError")
+                        for tag in (
+                            "ERROR",
+                            "error:",
+                            "Exception",
+                            "AssertionError",
+                        )
                     )
                 ),
                 "",
@@ -947,35 +1378,28 @@ def _generate_and_fix_tests(
                 sandbox=sandbox,
             )
 
-        # Step 2: ruff fixes first — handles imports, style, auto-fixable errors.
-        _fix_code_errors_with_llm(
-            project_path,
-            ["tests/"],
-            installed_deps,
-            model_provider,
-            model,
-            show_output,
-            sandbox=sandbox,
-        )
-        _format_code(project_path, sandbox=sandbox)
-
-        # Step 3: fix each failing test file individually with the LLM.
-        failures = _parse_pytest_failures(output)
-        if failures:
-            _fix_pytest_failures_with_llm(
-                project_path,
-                failures,
-                src_dir,
-                package_name,
-                installed_deps,
-                model_provider,
-                model,
-                show_output,
-                web_context=web_ctx,
-                sandbox=sandbox,
+        # Step 2: fix test failures
+        if model_provider == "claude" and session_id:
+            # Claude session: ask it to fix failures directly
+            _, session_id = _run_claude_session(
+                prompt=(
+                    "The tests are failing. Here is the "
+                    "pytest output:\n\n"
+                    f"{output[-3000:]}\n\n"
+                    "Fix the failing tests. Read the test "
+                    "files and source files as needed, then "
+                    "edit the test files to make them pass."
+                ),
+                model=model,
+                cwd=project_path,
+                permission_mode="acceptEdits",
+                effort="high",
+                resume_session=session_id,
+                show_output=show_output,
             )
-            # Final ruff cleanup after all LLM edits.
-            _fix_code_errors_with_llm(
+        else:
+            # Ollama / no-session fallback
+            session_id = _fix_code_errors_with_llm(
                 project_path,
                 ["tests/"],
                 installed_deps,
@@ -983,8 +1407,36 @@ def _generate_and_fix_tests(
                 model,
                 show_output,
                 sandbox=sandbox,
+                session_id=session_id,
             )
             _format_code(project_path, sandbox=sandbox)
+
+            failures = _parse_pytest_failures(output)
+            if failures:
+                _fix_pytest_failures_with_llm(
+                    project_path,
+                    failures,
+                    src_dir,
+                    package_name,
+                    installed_deps,
+                    model_provider,
+                    model,
+                    show_output,
+                    web_context=web_ctx,
+                    sandbox=sandbox,
+                )
+                session_id = _fix_code_errors_with_llm(
+                    project_path,
+                    ["tests/"],
+                    installed_deps,
+                    model_provider,
+                    model,
+                    show_output,
+                    sandbox=sandbox,
+                    session_id=session_id,
+                )
+
+        _format_code(project_path, sandbox=sandbox)
 
     try:
         _run_cmd(["git", "add", "-A"], cwd=project_path, check=False)

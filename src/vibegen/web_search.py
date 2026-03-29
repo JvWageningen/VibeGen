@@ -186,8 +186,8 @@ class DuckDuckGoProvider:
         Returns:
             List of SearchResult objects, empty on any error.
         """
-        search_url = (
-            "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote_plus(query)
+        search_url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote_plus(
+            query
         )
         req = urllib.request.Request(search_url, headers={"User-Agent": _UA})
         try:
@@ -232,8 +232,8 @@ class GoogleProvider:
     def is_available(cls) -> bool:
         """Return True when both required env vars are set."""
         return bool(
-            os.environ.get("GOOGLE_API_KEY") and
-            os.environ.get("GOOGLE_SEARCH_ENGINE_ID")
+            os.environ.get("GOOGLE_API_KEY")
+            and os.environ.get("GOOGLE_SEARCH_ENGINE_ID")
         )
 
     def search(self, query: str, max_results: int) -> list[SearchResult]:
@@ -249,12 +249,14 @@ class GoogleProvider:
         if not self.api_key or not self.cx:
             return []
 
-        params = urllib.parse.urlencode({
-            "key": self.api_key,
-            "cx": self.cx,
-            "q": query,
-            "num": min(max_results, 10),
-        })
+        params = urllib.parse.urlencode(
+            {
+                "key": self.api_key,
+                "cx": self.cx,
+                "q": query,
+                "num": min(max_results, 10),
+            }
+        )
         req = urllib.request.Request(
             f"{self._API_URL}?{params}", headers={"User-Agent": _UA}
         )
@@ -419,9 +421,7 @@ def _score_url(url: str) -> int:
 
 def _normalize_url(url: str) -> str:
     """Convert GitHub blob URLs to raw content URLs for direct fetching."""
-    gh_blob = re.match(
-        r"https://github\.com/([^/]+/[^/]+)/blob/(.+)", url
-    )
+    gh_blob = re.match(r"https://github\.com/([^/]+/[^/]+)/blob/(.+)", url)
     if gh_blob:
         return (
             f"https://raw.githubusercontent.com/{gh_blob.group(1)}/{gh_blob.group(2)}"

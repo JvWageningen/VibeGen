@@ -1,0 +1,79 @@
+name: Version Bump
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    # Skip if the push was made by the version-bump bot itself
+    if: "!contains(github.event.head_commit.message, '[skip-version]')"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Detect changed files
+        id: changes
+        run: |
+          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git diff --name-only HEAD)
+          if echo "$CHANGED" | grep -q '^src/vibegen/'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Determine bump level
+        id: bump-type
+        run: |
+          MSG="${{ github.event.head_commit.message }}"
+
+          if echo "$MSG" | grep -qi '\[major\]'; then
+            echo "part=major" >> "$GITHUB_OUTPUT"
+          elif echo "$MSG" | grep -qi '\[minor\]'; then
+            echo "part=minor" >> "$GITHUB_OUTPUT"
+          elif echo "$MSG" | grep -qi '\[patch\]'; then
+            echo "part=patch" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.changes.outputs.changed }}" = "true" ]; then
+            echo "part=patch" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump version
+        id: version
+        if: steps.bump-type.outputs.part != ''
+        run: |
+          uv run python scripts/release.py ${{ steps.bump-type.outputs.part }}
+          echo "new_version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Commit version bump
+        if: steps.bump-type.outputs.part != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A versions/ VERSION pyproject.toml src/vibegen/__init__.py
+          git diff --cached --quiet && exit 0
+          git commit -m "chore: bump version to ${{ steps.version.outputs.new_version }} [skip-version]"
+          git push
+
+      - name: Create release
+        if: steps.bump-type.outputs.part != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.new_version }}
+          name: v${{ steps.version.outputs.new_version }}
+          generate_release_notes: true

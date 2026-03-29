@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from vibegen._scaffold import (
+    _copy_claude_commands,
     _copy_docs,
     _create_vscode_settings,
     _ensure_directory,
@@ -16,7 +17,10 @@ from vibegen._scaffold import (
     _generate_readme,
     _init_git,
     _update_pyproject_tools,
+    _write_ci_workflow,
     _write_claude_md,
+    _write_claude_settings,
+    _write_conftest,
     _write_gitattributes,
     _write_gitignore,
     _write_pre_commit_config,
@@ -374,3 +378,132 @@ def test_generate_readme_no_src_dir(tmp_path: Path, minimal_spec: dict) -> None:
     content = (tmp_path / "README.md").read_text(encoding="utf-8")
     # Falls back to placeholder
     assert "generated source files" in content
+
+
+# ---------------------------------------------------------------------------
+# _write_claude_settings
+# ---------------------------------------------------------------------------
+
+
+def test_write_claude_settings_creates_file(tmp_path: Path) -> None:
+    _write_claude_settings(tmp_path)
+    settings_file = tmp_path / ".claude" / "settings.local.json"
+    assert settings_file.exists()
+
+
+def test_write_claude_settings_valid_json(tmp_path: Path) -> None:
+    _write_claude_settings(tmp_path)
+    settings_file = tmp_path / ".claude" / "settings.local.json"
+    data = json.loads(settings_file.read_text(encoding="utf-8"))
+    assert "permissions" in data
+
+
+def test_write_claude_settings_has_deny_rules(tmp_path: Path) -> None:
+    _write_claude_settings(tmp_path)
+    settings_file = tmp_path / ".claude" / "settings.local.json"
+    data = json.loads(settings_file.read_text(encoding="utf-8"))
+    deny = data["permissions"]["deny"]
+    assert "Bash(rm -rf /)" in deny
+    assert "Bash(sudo *)" in deny
+
+
+def test_write_claude_settings_has_ask_rules(tmp_path: Path) -> None:
+    _write_claude_settings(tmp_path)
+    settings_file = tmp_path / ".claude" / "settings.local.json"
+    data = json.loads(settings_file.read_text(encoding="utf-8"))
+    ask = data["permissions"]["ask"]
+    assert "Bash(rm *)" in ask
+    assert "Bash(git reset *)" in ask
+    assert "Bash(docker *)" in ask
+
+
+# ---------------------------------------------------------------------------
+# _copy_claude_commands
+# ---------------------------------------------------------------------------
+
+
+def test_copy_claude_commands_creates_directories(
+    tmp_path: Path,
+) -> None:
+    _copy_claude_commands(tmp_path)
+    cmds_dir = tmp_path / ".claude" / "commands"
+    assert cmds_dir.exists()
+    subdirs = {d.name for d in cmds_dir.iterdir() if d.is_dir()}
+    expected = {"analysis", "docs", "feature", "quality", "test"}
+    assert expected <= subdirs
+
+
+def test_copy_claude_commands_copies_files(tmp_path: Path) -> None:
+    _copy_claude_commands(tmp_path)
+    cmds_dir = tmp_path / ".claude" / "commands"
+    md_files = list(cmds_dir.rglob("*.md"))
+    assert len(md_files) >= 40  # at least 40 of 43
+
+
+def test_copy_claude_commands_preserves_content(
+    tmp_path: Path,
+) -> None:
+    _copy_claude_commands(tmp_path)
+    explain = tmp_path / ".claude" / "commands" / "analysis" / "explain.md"
+    assert explain.exists()
+    content = explain.read_text(encoding="utf-8")
+    assert len(content) > 10
+
+
+# ---------------------------------------------------------------------------
+# _write_conftest
+# ---------------------------------------------------------------------------
+
+
+def test_write_conftest_creates_file(tmp_path: Path) -> None:
+    _write_conftest(tmp_path, "mytool")
+    assert (tmp_path / "tests" / "conftest.py").exists()
+
+
+def test_write_conftest_contains_fixture(tmp_path: Path) -> None:
+    _write_conftest(tmp_path, "mytool")
+    content = (tmp_path / "tests" / "conftest.py").read_text(
+        encoding="utf-8",
+    )
+    assert "data_dir" in content
+    assert "mytool" in content
+
+
+def test_write_conftest_does_not_overwrite(tmp_path: Path) -> None:
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    conftest = tests_dir / "conftest.py"
+    conftest.write_text("# custom", encoding="utf-8")
+    _write_conftest(tmp_path, "mytool")
+    assert conftest.read_text(encoding="utf-8") == "# custom"
+
+
+# ---------------------------------------------------------------------------
+# _write_ci_workflow
+# ---------------------------------------------------------------------------
+
+
+def test_write_ci_workflow_creates_file(tmp_path: Path) -> None:
+    _write_ci_workflow(tmp_path, "3.12")
+    ci = tmp_path / ".github" / "workflows" / "ci.yml"
+    assert ci.exists()
+
+
+def test_write_ci_workflow_contains_python_version(
+    tmp_path: Path,
+) -> None:
+    _write_ci_workflow(tmp_path, "3.11")
+    content = (tmp_path / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "3.11" in content
+
+
+def test_write_ci_workflow_runs_checks(tmp_path: Path) -> None:
+    _write_ci_workflow(tmp_path, "3.12")
+    content = (tmp_path / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "ruff check" in content
+    assert "pytest" in content
+    assert "mypy src/" in content

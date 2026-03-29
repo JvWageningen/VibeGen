@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(*)",
-      "Bash(uv run python -c \":*)"
+      "Bash(uv run python -c \":*)",
+      "WebSearch"
     ],
     "deny": [
       "Bash(rm -rf /)",

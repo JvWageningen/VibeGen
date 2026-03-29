@@ -49,7 +49,11 @@ def _parse_generated_files(output: str) -> dict[str, str]:
 
 
 def _clean_file_content(lines: list[str]) -> str:
-    """Strip markdown code fences and any narrative text after the closing fence.
+    """Strip markdown code fences if present; keep raw code otherwise.
+
+    Handles two LLM output styles:
+    1. Code wrapped in markdown fences (```python ... ```) — fences are stripped.
+    2. Raw code without fences — returned as-is.
 
     Args:
         lines: Lines of raw LLM content for one file block.
@@ -57,6 +61,11 @@ def _clean_file_content(lines: list[str]) -> str:
     Returns:
         Cleaned source code string.
     """
+    has_fences = any(line.strip().startswith("```") for line in lines)
+
+    if not has_fences:
+        return "\n".join(lines).strip("\n")
+
     result: list[str] = []
     in_code_block = False
     last_fence_was_closing = False

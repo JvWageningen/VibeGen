@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 _SESSION_FILE = ".vibegen/session.json"
@@ -44,7 +44,7 @@ class Session:
 
     def __post_init__(self) -> None:
         if not self.timestamp:
-            self.timestamp = datetime.now(timezone.utc).isoformat()
+            self.timestamp = datetime.now(UTC).isoformat()
 
 
 def hash_spec(spec_path: Path) -> str:
@@ -71,7 +71,7 @@ def save_session(project_path: Path, session: Session) -> None:
     session_dir.mkdir(exist_ok=True)
     session_file = project_path / _SESSION_FILE
     data = asdict(session)
-    data["timestamp"] = datetime.now(timezone.utc).isoformat()
+    data["timestamp"] = datetime.now(UTC).isoformat()
     session_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 

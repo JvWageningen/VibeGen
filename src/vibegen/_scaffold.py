@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -88,6 +89,115 @@ After any code change, always:
 - No `print()` statements - use loguru
 """
     _write_file(project_path / "CLAUDE.md", content)
+
+
+def _write_claude_settings(project_path: Path) -> None:
+    """Write ``.claude/settings.local.json`` with default permissions.
+
+    Configures Claude Code with sensible allow/deny/ask rules so the
+    generated project is immediately usable with Claude Code.
+
+    Args:
+        project_path: Project root directory.
+    """
+    claude_dir = project_path / ".claude"
+    _ensure_directory(claude_dir)
+    settings = {
+        "permissions": {
+            "allow": [
+                "Bash(*)",
+                "Bash(uv run python -c :*)",
+                "WebSearch",
+            ],
+            "deny": [
+                "Bash(rm -rf /)",
+                "Bash(rm -rf /*)",
+                "Bash(sudo *)",
+                "Bash(shutdown *)",
+                "Bash(reboot *)",
+                "Bash(poweroff *)",
+                "Bash(dd *)",
+                "Bash(mkfs *)",
+            ],
+            "ask": [
+                "Bash(rm *)",
+                "Bash(rmdir *)",
+                "Bash(mv *)",
+                "Bash(cp -r *)",
+                "Bash(git reset *)",
+                "Bash(git clean *)",
+                "Bash(git checkout *)",
+                "Bash(git branch -D *)",
+                "Bash(pip install *)",
+                "Bash(uv pip install *)",
+                "Bash(npm install *)",
+                "Bash(docker *)",
+            ],
+        }
+    }
+    _write_file(
+        claude_dir / "settings.local.json",
+        json.dumps(settings, indent=2),
+    )
+
+
+def _copy_claude_commands(project_path: Path) -> None:
+    """Copy bundled ``.claude/commands/`` templates into the project.
+
+    The 43 command templates provide slash-command shortcuts for
+    analysis, documentation, feature work, quality, and testing.
+
+    Args:
+        project_path: Project root directory.
+    """
+    dest_dir = project_path / ".claude" / "commands"
+
+    # Locate bundled templates via importlib.resources (Python 3.11+)
+    try:
+        templates_root = resources.files("vibegen") / "templates" / "claude_commands"
+    except (TypeError, FileNotFoundError):
+        templates_root = None
+
+    # Fallback: resolve relative to this file
+    if templates_root is None or not _traversable_exists(templates_root):
+        templates_root = Path(__file__).parent / "templates" / "claude_commands"
+
+    if not _traversable_exists(templates_root):
+        return
+
+    _copy_traversable_tree(templates_root, dest_dir)
+
+
+def _traversable_exists(path: Any) -> bool:
+    """Check whether a Traversable or Path exists and is a directory.
+
+    Args:
+        path: A ``pathlib.Path`` or ``importlib.resources.abc.Traversable``.
+
+    Returns:
+        True if the path exists and is a directory.
+    """
+    try:
+        return path.is_dir()
+    except (AttributeError, FileNotFoundError, TypeError):
+        return False
+
+
+def _copy_traversable_tree(src: Any, dest: Path) -> None:
+    """Recursively copy a Traversable (or Path) tree into *dest*.
+
+    Args:
+        src: Source directory (Traversable or Path).
+        dest: Destination directory on the filesystem.
+    """
+    _ensure_directory(dest)
+    for item in src.iterdir():
+        target = dest / item.name
+        if item.is_dir():
+            _copy_traversable_tree(item, target)
+        elif item.is_file() and item.name.endswith(".md"):
+            content = item.read_text(encoding="utf-8")
+            _write_file(target, content)
 
 
 def _create_vscode_settings(project_path: Path) -> None:
@@ -248,6 +358,85 @@ min_confidence = 80
 paths = ["src/"]
 """
     _write_file(pyproject_path, text + tool_config)
+
+
+def _write_conftest(project_path: Path, package_name: str) -> None:
+    """Write a minimal ``tests/conftest.py`` with shared fixtures.
+
+    Does nothing if the file already exists to avoid overwriting
+    LLM-generated fixtures.
+
+    Args:
+        project_path: Project root directory.
+        package_name: Python package name (for the docstring).
+    """
+    tests_dir = project_path / "tests"
+    _ensure_directory(tests_dir)
+    conftest = tests_dir / "conftest.py"
+    if conftest.exists():
+        return
+
+    content = f'''\
+"""Shared pytest fixtures for {package_name} tests."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+
+@pytest.fixture()
+def data_dir() -> Path:
+    """Return the path to the test data directory."""
+    d = Path(__file__).parent / "data"
+    d.mkdir(exist_ok=True)
+    return d
+'''
+    _write_file(conftest, content)
+
+
+def _write_ci_workflow(
+    project_path: Path,
+    python_version: str,
+) -> None:
+    """Write ``.github/workflows/ci.yml`` for automated CI.
+
+    Generates a GitHub Actions workflow that runs ruff, pytest,
+    and mypy on push and pull requests to main.
+
+    Args:
+        project_path: Project root directory.
+        python_version: Python version string (e.g. ``"3.12"``).
+    """
+    workflows_dir = project_path / ".github" / "workflows"
+    _ensure_directory(workflows_dir)
+
+    content = f"""\
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "{python_version}"
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest -x --tb=short
+      - run: uv run mypy src/
+"""
+    _write_file(workflows_dir / "ci.yml", content)
 
 
 def _init_git(project_path: Path) -> None:
@@ -451,30 +640,30 @@ def _detect_package_name(project_path: Path) -> str | None:
     return None
 
 
-def _repair_project(project_path: Path) -> int:
+def _repair_project(
+    project_path: Path,
+) -> tuple[int, dict[str, Any], str]:
     """Re-apply scaffold files to an existing project.
 
     Reads the current project structure, then writes/overwrites all scaffold
-    files (``CLAUDE.md``, ``.vscode/settings.json``, ``.gitignore``,
-    ``.gitattributes``, ``.pre-commit-config.yaml``, ``pyproject.toml`` tool
-    config) so the project functions the same as if it had been newly generated
-    by vibegen.
+    files so the project matches a freshly generated vibegen project.
 
     Args:
         project_path: Path to the existing project root directory.
 
     Returns:
-        Exit code (0 = success, 1 = error).
+        Tuple of (exit_code, spec_dict, package_name).
+        On error the spec dict is empty and package_name is ``""``.
     """
     if not project_path.exists():
         _print_err(f"Repo path not found: {project_path}")
-        return 1
+        return 1, {}, ""
 
     if not (project_path / "pyproject.toml").exists():
         _print_err(
             f"No pyproject.toml found at {project_path}. Is this a Python project?"
         )
-        return 1
+        return 1, {}, ""
 
     info = _read_pyproject_info(project_path)
     project_name = info["project_name"]
@@ -503,6 +692,12 @@ def _repair_project(project_path: Path) -> int:
     _write_claude_md(project_path, spec)
     _print_ok("Written: CLAUDE.md")
 
+    _write_claude_settings(project_path)
+    _print_ok("Written: .claude/settings.local.json")
+
+    _copy_claude_commands(project_path)
+    _print_ok("Written: .claude/commands/")
+
     _create_vscode_settings(project_path)
     _print_ok("Written: .vscode/settings.json")
 
@@ -525,6 +720,12 @@ def _repair_project(project_path: Path) -> int:
     _update_pyproject_tools(project_path)
     _print_ok("Updated: pyproject.toml (tool config)")
 
+    _write_conftest(project_path, package_name)
+    _print_ok("Written: tests/conftest.py")
+
+    _write_ci_workflow(project_path, python_version)
+    _print_ok("Written: .github/workflows/ci.yml")
+
     _generate_readme(project_path, spec, package_name)
     _print_ok("Written: README.md")
 
@@ -539,4 +740,4 @@ def _repair_project(project_path: Path) -> int:
     except Exception:  # noqa: BLE001
         _print_warn("Could not create git commit.")
 
-    return 0
+    return 0, spec, package_name

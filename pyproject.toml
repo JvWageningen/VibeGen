@@ -1,6 +1,6 @@
 [project]
 name = "vibegen"
-version = "0.1.0"
+version = "0.2.0"
 description = "Cross-platform Python project generator powered by Claude Code."
 authors = [
     { name = "Jeroen", email = "jeroen@vwageningen.com" }
@@ -30,7 +30,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-vibegen = ["prompts/*.txt", "prompts/*.md"]
+vibegen = ["prompts/*.txt", "prompts/*.md", "templates/**/*.md"]
 
 [project.optional-dependencies]
 dev = [
@@ -39,6 +39,9 @@ dev = [
   "pytest-cov",
   "mypy",
   "radon",
+  "bandit",
+  "vulture",
+  "pip-audit",
   "requests",  # required for Ollama client and other tooling
 ]
 
@@ -71,6 +74,8 @@ members = [
 [dependency-groups]
 dev = [
     "types-requests>=2.32.4.20260107",
+    "bandit>=1.9",
+    "vulture>=2.15",
 ]
 # radon configuration is done via CLI flags; this section exists for future tooling.
 

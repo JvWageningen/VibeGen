@@ -4,13 +4,21 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+import sys
 from pathlib import Path
 
-from ._analysis import _parse_spec
+# Force UTF-8 for console I/O on Windows to prevent charmap encoding errors
+# when LLM output contains Unicode characters (emojis, arrows, etc.).
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from ._io import _print_err, _print_ok, _print_step, _print_warn, _run_cmd
 from ._pipeline import _generate_and_fix_tests, _generate_code
 from ._plan import build_default_plan
 from ._scaffold import (
+    _copy_claude_commands,
     _copy_docs,
     _create_vscode_settings,
     _ensure_package_dir,
@@ -18,7 +26,10 @@ from ._scaffold import (
     _init_git,
     _repair_project,
     _update_pyproject_tools,
+    _write_ci_workflow,
     _write_claude_md,
+    _write_claude_settings,
+    _write_conftest,
     _write_gitattributes,
     _write_gitignore,
     _write_pre_commit_config,
@@ -89,7 +100,55 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.repair:
         repo_path = Path(args.repo_path) if args.repo_path else Path.cwd()
-        return _repair_project(repo_path)
+        exit_code, spec, package_name = _repair_project(repo_path)
+        if exit_code != 0:
+            return exit_code
+
+        # If a spec file is also provided, run code generation
+        if args.spec_file:
+            from ._analysis import _parse_spec
+
+            spec_path = Path(args.spec_file)
+            if spec_path.exists():
+                spec = _parse_spec(spec_path)
+                package_name = (
+                    spec["project_name"].lower().replace("-", "_").replace(" ", "_")
+                )
+            task_plan = build_default_plan()
+            for step_id in (
+                "scaffold",
+                "install_deps",
+            ):
+                task_plan.skip(step_id, "repair mode")
+
+            try:
+                code_result = _generate_code(
+                    repo_path,
+                    spec,
+                    package_name,
+                    args.model_provider,
+                    args.model,
+                    show_output=args.show_output,
+                    plan=task_plan,
+                )
+                if code_result:
+                    claude_session = code_result if isinstance(code_result, str) else ""
+                    _generate_and_fix_tests(
+                        repo_path,
+                        spec,
+                        package_name,
+                        args.model_provider,
+                        args.model,
+                        max_fix_attempts=args.max_fix_attempts,
+                        show_output=args.show_output,
+                        plan=task_plan,
+                        session_id=claude_session,
+                    )
+                    _print_ok("Generation complete!")
+            except Exception as e:  # noqa: BLE001
+                _print_warn(f"Code generation failed: {e}")
+
+        return 0
 
     spec_path = Path(args.spec_file)
     if not spec_path.exists():
@@ -149,8 +208,14 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             _run_cmd(
-                ["uv", "init", str(output_dir), "--lib", "--python",
-                 spec["python_version"]]
+                [
+                    "uv",
+                    "init",
+                    str(output_dir),
+                    "--lib",
+                    "--python",
+                    spec["python_version"],
+                ]
             )
         except subprocess.CalledProcessError as e:
             _print_err(f"Failed to scaffold project: {e}")
@@ -159,11 +224,15 @@ def main(argv: list[str] | None = None) -> int:
 
         _ensure_package_dir(output_dir, package_name)
         _write_claude_md(output_dir, spec)
+        _write_claude_settings(output_dir)
+        _copy_claude_commands(output_dir)
         _create_vscode_settings(output_dir)
         _write_gitignore(output_dir)
         _write_gitattributes(output_dir)
         _write_pre_commit_config(output_dir)
         _update_pyproject_tools(output_dir)
+        _write_conftest(output_dir, package_name)
+        _write_ci_workflow(output_dir, spec["python_version"])
         _copy_docs(output_dir, spec_path, spec["doc_files"])
         _init_git(output_dir)
         _generate_readme(output_dir, spec, package_name)
@@ -187,11 +256,15 @@ def main(argv: list[str] | None = None) -> int:
         task_plan.complete("install_deps")
 
         if resuming:
-            for step_id in ("plan_code", "generate_code", "fix_code_ruff",
-                            "fix_code_llm"):
+            for step_id in (
+                "plan_code",
+                "generate_code",
+                "fix_code_ruff",
+                "fix_code_llm",
+            ):
                 task_plan.skip(step_id, "resuming previous run")
 
-        code_generated = resuming or _generate_code(
+        code_result = resuming or _generate_code(
             output_dir,
             spec,
             package_name,
@@ -202,7 +275,10 @@ def main(argv: list[str] | None = None) -> int:
             plan=task_plan,
         )
 
-        if code_generated:
+        if code_result:
+            # For Claude, code_result is the session ID (str);
+            # for Ollama it's True (bool).
+            claude_session = code_result if isinstance(code_result, str) else ""
             _generate_and_fix_tests(
                 output_dir,
                 spec,
@@ -213,6 +289,7 @@ def main(argv: list[str] | None = None) -> int:
                 show_output=args.show_output,
                 sandbox=sandbox,
                 plan=task_plan,
+                session_id=claude_session,
             )
 
             task_plan.start("finalize")

@@ -24,10 +24,10 @@ def test_clean_file_content_strips_code_fence() -> None:
 
 
 def test_clean_file_content_no_fence() -> None:
-    # Without fences, non-code content is outside in_code_block → not captured
+    # Without fences, raw content is kept as-is
     lines = ["just some text"]
     result = _clean_file_content(lines)
-    assert result == ""
+    assert result == "just some text"
 
 
 def test_clean_file_content_narrative_stops_at_first_fence() -> None:

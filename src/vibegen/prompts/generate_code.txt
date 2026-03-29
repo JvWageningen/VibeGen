@@ -1,5 +1,6 @@
 TASK
-Your job is to implement the requested Python module(s) from the specification.
+Your job is to implement COMPLETE, WORKING Python source code for the project described below.
+Do NOT return a plan, summary, or description. Write the FULL implementation code for every module.
 
 IMPLEMENTATION PLAN
 {{plan}}
@@ -52,4 +53,9 @@ Example:
 --- file: src/{{package}}/main.py ---
 # main.py content here
 
-Do NOT wrap the output in markdown fences or add any extra text.
+CRITICAL RULES:
+- You MUST use the "--- file: <path> ---" delimiter before each file.
+- Write COMPLETE implementation code, not stubs, summaries, or ellipses.
+- Do NOT wrap the entire output in markdown fences.
+- Do NOT return a plan or description instead of code.
+- Every function body must contain real implementation logic.

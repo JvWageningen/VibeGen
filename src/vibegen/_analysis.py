@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -423,7 +423,9 @@ def _build_error_context(
         message = ruff_match.group(3).strip()
     else:
         # Try pytest "path:line: ErrorType: message"
-        pytest_match = re.search(r":(\d+):\s+(\w+Error|\w+Exception):\s+(.*)", error_line)
+        pytest_match = re.search(
+            r":(\d+):\s+(\w+Error|\w+Exception):\s+(.*)", error_line
+        )
         if pytest_match:
             line_num = int(pytest_match.group(1))
             error_type = pytest_match.group(2)
@@ -437,9 +439,7 @@ def _build_error_context(
             all_lines = full_path.read_text(encoding="utf-8").splitlines()
             start = max(0, line_num - context_lines - 1)
             end = min(len(all_lines), line_num + context_lines)
-            numbered = [
-                f"{i + 1:4d} | {all_lines[i]}" for i in range(start, end)
-            ]
+            numbered = [f"{i + 1:4d} | {all_lines[i]}" for i in range(start, end)]
             relevant_source = "\n".join(numbered)
         except OSError:
             pass

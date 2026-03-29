@@ -1,0 +1,21 @@
+{
+  "version": "0.2.0",
+  "released_at": "2026-03-29T11:24:19.424039+00:00",
+  "git_commit": "a21ff3eba756cc5128cefb814277c3f001674144",
+  "files": {
+    "vibegen/__init__.py": "eaae7f33579e0d0f0d4725d65df857ace48a1d79d6d99ee5baad53bde708ef4a",
+    "vibegen/__main__.py": "7e313b2dd3f5ce5853acaad711a726c198c04364b036320a1f8f89ff43ccc108",
+    "vibegen/_analysis.py": "097d4161b6a69c6947a6a347ab9339078151f92a766003c70b23c9aa09345e78",
+    "vibegen/_io.py": "bfefb703437a2186fa2b5e1a252da69ae0c14e27875bd5fa683d72e9a3397849",
+    "vibegen/_llm.py": "91f059ef476b45a1c542cdb12b473dda34fb8692799edb411e4d6b2e396141d4",
+    "vibegen/_output_parser.py": "6247292a5480ca7abc5817728e1d4ebe357d2f0ff2a4e61afb49f1ddc5b77135",
+    "vibegen/_pipeline.py": "f3ac3e883f5e2dc6b5dd3328ae128b69c7acd0dc2a34bed4dd8cc1649b3db413",
+    "vibegen/_plan.py": "7a3619c442120e6d688ebcc068736ae34ab0a38fd29439f6479688ad0c34e767",
+    "vibegen/_scaffold.py": "08e75a392358bfab2cb15d1df1ca885b3b9b16ceaf2efa9e4bf0846f2ae820c1",
+    "vibegen/_session.py": "32e1147516592e6f0c89947cb4aa6ff5a31338939e44393ed4af6d1358312730",
+    "vibegen/cli.py": "6665832e120a7efe2b29ac9fe8ec6f2dec83576ad66b9f19571cd2b72b987c2c",
+    "vibegen/ollama_client.py": "f34a43b601d70f76ebf73d8962f88370264e5a4756c923c06ee0fe466d75dc64",
+    "vibegen/sandbox.py": "376f7a5e85c50d54de91827109c3499f91765ad1b1ec122b41d16b4a282b8086",
+    "vibegen/web_search.py": "ef62987e352f51973a174fb4d6fc3205cffc3ce96c38348a1955905ed5f8f065"
+  }
+}

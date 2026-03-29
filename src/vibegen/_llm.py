@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -97,8 +98,13 @@ def _run_llm_role(
     system_prompt = _load_prompt_template(f"role_{role}") or _load_prompt_template(
         "system"
     )
-    return _run_llm(prompt, model_provider, model, system_prompt=system_prompt,
-                    show_output=show_output)
+    return _run_llm(
+        prompt,
+        model_provider,
+        model,
+        system_prompt=system_prompt,
+        show_output=show_output,
+    )
 
 
 def _run_llm(
@@ -156,6 +162,7 @@ def _run_claude(prompt: str, model: str, system_prompt: str, show_output: bool) 
         text=True,
         capture_output=True,
         check=False,
+        encoding="utf-8",
     )
     if proc.returncode != 0:
         _print_err(f"Claude CLI exited with code {proc.returncode}")
@@ -166,6 +173,88 @@ def _run_claude(prompt: str, model: str, system_prompt: str, show_output: bool) 
         if proc.stderr:
             print(proc.stderr, file=sys.stderr)
     return proc.stdout or ""
+
+
+def _run_claude_session(
+    prompt: str,
+    model: str,
+    cwd: Path,
+    permission_mode: str = "plan",
+    effort: str = "high",
+    resume_session: str | None = None,
+    system_prompt: str = "",
+    max_turns: int = 50,
+    show_output: bool = False,
+) -> tuple[str, str]:
+    """Run Claude CLI in session mode with plan/execute phases.
+
+    Uses ``--output-format json`` to capture both the response text
+    and the session ID for multi-turn continuations.
+
+    Args:
+        prompt: User prompt.
+        model: Claude model identifier.
+        cwd: Working directory for Claude (the project root).
+        permission_mode: One of ``"plan"``, ``"acceptEdits"``, ``"auto"``.
+        effort: Effort level (``"low"``, ``"medium"``, ``"high"``).
+        resume_session: Session ID to resume, or None to start fresh.
+        system_prompt: System prompt string.
+        max_turns: Maximum agentic turns before exiting.
+        show_output: Print LLM output to stdout when True.
+
+    Returns:
+        Tuple of (result_text, session_id).
+    """
+    cmd = [
+        "claude",
+        "-p",
+        "--model",
+        model,
+        "--effort",
+        effort,
+        "--permission-mode",
+        permission_mode,
+        "--output-format",
+        "json",
+        "--max-turns",
+        str(max_turns),
+    ]
+    if resume_session:
+        cmd.extend(["--resume", resume_session])
+    if system_prompt:
+        cmd.extend(["--system-prompt", system_prompt])
+
+    proc = subprocess.run(
+        cmd,
+        input=prompt,
+        text=True,
+        capture_output=True,
+        check=False,
+        encoding="utf-8",
+        cwd=cwd,
+    )
+
+    result_text = ""
+    session_id = ""
+
+    if proc.stdout:
+        try:
+            data = json.loads(proc.stdout)
+            result_text = data.get("result", "")
+            session_id = data.get("session_id", "")
+        except json.JSONDecodeError:
+            result_text = proc.stdout
+            _print_err("Failed to parse Claude JSON output")
+
+    if proc.returncode != 0:
+        _print_err(f"Claude CLI exited with code {proc.returncode}")
+        if proc.stderr:
+            _print_err(proc.stderr[:500])
+
+    if show_output and result_text:
+        print(result_text)
+
+    return result_text, session_id
 
 
 def _run_ollama(prompt: str, model: str, system_prompt: str, show_output: bool) -> str:

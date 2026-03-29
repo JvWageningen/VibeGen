@@ -83,4 +83,5 @@ def _run_cmd(
         text=True,
         env=env,
         check=check,
+        encoding="utf-8",
     )
