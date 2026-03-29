@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,24 +26,29 @@ def _write_file(path: Path, content: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _ts() -> str:
+    """Return the current time as ``HH:MM:SS``."""
+    return datetime.now().strftime("%H:%M:%S")
+
+
 def _print_step(message: str) -> None:
     """Print a [STEP] progress message."""
-    print(f"[STEP]  {message}")
+    print(f"[{_ts()}][STEP]  {message}", flush=True)
 
 
 def _print_ok(message: str) -> None:
     """Print an [OK] success message."""
-    print(f"[OK]    {message}")
+    print(f"[{_ts()}][OK]    {message}", flush=True)
 
 
 def _print_warn(message: str) -> None:
     """Print a [WARN] warning message."""
-    print(f"[WARN]  {message}")
+    print(f"[{_ts()}][WARN]  {message}", flush=True)
 
 
 def _print_err(message: str) -> None:
     """Print an [ERR] error message to stderr."""
-    print(f"[ERR]   {message}", file=sys.stderr)
+    print(f"[{_ts()}][ERR]   {message}", file=sys.stderr, flush=True)
 
 
 # ---------------------------------------------------------------------------
