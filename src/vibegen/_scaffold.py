@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -469,12 +470,12 @@ def _init_git(project_path: Path) -> None:
 
 
 def _copy_docs(project_path: Path, spec_path: Path, doc_files: list[str]) -> None:
-    """Copy documentation files referenced in the spec to ``docs/``.
+    """Copy documentation files and directories referenced in the spec to ``docs/``.
 
     Args:
         project_path: Project root directory.
         spec_path: Path to the spec file (used to resolve relative doc paths).
-        doc_files: List of relative doc file paths from the spec.
+        doc_files: List of relative doc file/directory paths from the spec.
     """
     if not doc_files:
         return
@@ -483,14 +484,31 @@ def _copy_docs(project_path: Path, spec_path: Path, doc_files: list[str]) -> Non
     docs_dir = project_path / "docs"
     _ensure_directory(docs_dir)
 
-    for doc_file in doc_files:
-        full_path = spec_dir / doc_file
-        if full_path.exists():
-            dest = docs_dir / Path(doc_file).name
-            _write_file(dest, full_path.read_text(encoding="utf-8"))
-            _print_ok(f"Loaded: {doc_file}")
+    for entry in doc_files:
+        full_path = spec_dir / entry
+        if not full_path.exists():
+            _print_warn(f"Documentation path not found: {full_path}")
+            continue
+
+        if full_path.is_dir():
+            for child in sorted(full_path.rglob("*")):
+                if not child.is_file():
+                    continue
+                rel = child.relative_to(full_path)
+                dest = docs_dir / entry / rel
+                _ensure_directory(dest.parent)
+                try:
+                    _write_file(dest, child.read_text(encoding="utf-8"))
+                except UnicodeDecodeError:
+                    shutil.copy2(child, dest)
+                _print_ok(f"Copied doc: {entry}/{rel}")
         else:
-            _print_warn(f"Documentation file not found: {full_path}")
+            dest = docs_dir / Path(entry).name
+            try:
+                _write_file(dest, full_path.read_text(encoding="utf-8"))
+            except UnicodeDecodeError:
+                shutil.copy2(full_path, dest)
+            _print_ok(f"Copied doc: {entry}")
 
 
 def _generate_readme(
