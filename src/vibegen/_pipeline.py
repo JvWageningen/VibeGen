@@ -351,6 +351,7 @@ def _generate_code(
     show_output: bool = False,
     sandbox: SandboxConfig | None = None,
     plan: TaskPlan | None = None,
+    resume_session: str = "",
 ) -> bool | str:
     """Generate source code with LLM, then auto-fix remaining errors.
 
@@ -399,6 +400,7 @@ def _generate_code(
             show_output=show_output,
             sandbox=sandbox,
             plan=plan,
+            resume_session=resume_session,
         )
     else:
         result = _generate_code_ollama(
@@ -493,6 +495,7 @@ def _generate_code_claude(
     show_output: bool = False,
     sandbox: SandboxConfig | None = None,
     plan: TaskPlan | None = None,
+    resume_session: str = "",
 ) -> str:
     """Generate code via Claude Code session (plan → execute).
 
@@ -555,6 +558,7 @@ def _generate_code_claude(
         cwd=project_path,
         permission_mode="acceptEdits",
         effort="high",
+        resume_session=resume_session or None,
         show_output=show_output,
         max_turns=100,
     )

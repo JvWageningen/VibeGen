@@ -38,6 +38,229 @@ from ._session import Session, hash_spec, save_session, spec_changed
 from .sandbox import SandboxConfig, ensure_image_ready
 
 
+def _run_improve_command(argv: list[str]) -> int:
+    """Parse and run the ``vibegen improve`` subcommand.
+
+    Args:
+        argv: Arguments after ``improve``.
+
+    Returns:
+        Exit code (0 = success, 1 = error).
+    """
+    parser = argparse.ArgumentParser(
+        prog="vibegen improve",
+        description="Iteratively improve a project with Claude",
+    )
+    parser.add_argument(
+        "project_path",
+        nargs="?",
+        default=".",
+        help="Path to the project to improve (default: .)",
+    )
+    parser.add_argument(
+        "--task",
+        required=True,
+        help="Improvement task description",
+    )
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=0,
+        help="Max iterations (0 = unlimited, stops on stall)",
+    )
+    parser.add_argument(
+        "--branch-name",
+        default="",
+        help="Branch name (default: vibegen/improve-<project>)",
+    )
+    parser.add_argument("--port", type=int, default=8089, help="Web UI port")
+    parser.add_argument("--model", default="claude-sonnet-4-6", help="Claude model")
+    parser.add_argument(
+        "--model-provider",
+        default="claude",
+        choices=["claude", "ollama"],
+        help="LLM provider",
+    )
+    parser.add_argument(
+        "--auto-merge",
+        action="store_true",
+        help="Merge to base branch when done",
+    )
+    parser.add_argument(
+        "--show-output",
+        action="store_true",
+        help="Show full Claude output",
+    )
+    parser.add_argument(
+        "--mode",
+        default="direct",
+        choices=["direct", "polling"],
+        help="Execution mode",
+    )
+    parser.add_argument(
+        "--poll-flag",
+        default=None,
+        help="Flag file path for polling mode",
+    )
+    parser.add_argument(
+        "--poll-interval",
+        type=int,
+        default=60,
+        help="Seconds between polls (polling mode)",
+    )
+    args = parser.parse_args(argv)
+
+    project_path = Path(args.project_path).resolve()
+    branch = args.branch_name or (f"vibegen/improve-{project_path.name}")
+
+    from ._improve_loop import _run_improve_loop
+
+    return _run_improve_loop(
+        project_path=project_path,
+        task=args.task,
+        max_iterations=args.max_iterations,
+        model=args.model,
+        model_provider=args.model_provider,
+        branch_name=branch,
+        port=args.port,
+        auto_merge=args.auto_merge,
+        show_output=args.show_output,
+        mode=args.mode,
+        poll_flag=args.poll_flag,
+        poll_interval=args.poll_interval,
+    )
+
+
+def _run_init_command(argv: list[str]) -> int:
+    """Parse and run the ``vibegen init`` subcommand.
+
+    Initialises VibeGen dev tooling on an existing project without requiring
+    a spec file.  Sets up ruff, pytest, mypy configuration, CLAUDE.md,
+    .claude/ commands, VS Code settings, pre-commit hooks, CI workflow, etc.
+
+    Args:
+        argv: Arguments after ``init``.
+
+    Returns:
+        Exit code (0 = success, 1 = error).
+    """
+    parser = argparse.ArgumentParser(
+        prog="vibegen init",
+        description="Initialize VibeGen dev tooling on an existing project",
+    )
+    parser.add_argument(
+        "project_path",
+        nargs="?",
+        default=".",
+        help="Path to the project (default: current directory)",
+    )
+    parser.add_argument(
+        "--model",
+        default="claude-sonnet-4-6",
+        help="Claude model for README generation",
+    )
+    parser.add_argument(
+        "--show-output",
+        action="store_true",
+        help="Show full Claude output",
+    )
+    args = parser.parse_args(argv)
+    project_path = Path(args.project_path).resolve()
+
+    _print_step(f"Initializing VibeGen tooling in {project_path}")
+    exit_code, _spec, _pkg = _repair_project(
+        project_path,
+        model=args.model,
+        show_output=args.show_output,
+    )
+    if exit_code == 0:
+        _print_ok("VibeGen tooling initialized successfully")
+    return exit_code
+
+
+def _run_design_command(argv: list[str]) -> int:
+    """Parse and run the ``vibegen design`` subcommand.
+
+    Interactively designs a spec.md via Claude Q&A, then optionally
+    generates the full project from the resulting spec.
+
+    Args:
+        argv: Arguments after ``design``.
+
+    Returns:
+        Exit code (0 = success, 1 = error).
+    """
+    parser = argparse.ArgumentParser(
+        prog="vibegen design",
+        description="Interactively design a project spec with Claude",
+    )
+    parser.add_argument(
+        "--description",
+        default="",
+        help="Brief project description (prompted if omitted)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=".",
+        help="Directory for spec.md and generated project",
+    )
+    parser.add_argument(
+        "--model",
+        default="claude-sonnet-4-6",
+        help="Claude model",
+    )
+    parser.add_argument(
+        "--show-output",
+        action="store_true",
+        help="Show full Claude output",
+    )
+    parser.add_argument(
+        "--spec-only",
+        action="store_true",
+        help="Generate spec.md only, do not create project",
+    )
+    parser.add_argument(
+        "--max-fix-attempts",
+        type=int,
+        default=3,
+        help="Max test fix iterations (for generation)",
+    )
+    parser.add_argument(
+        "--max-turns",
+        type=int,
+        default=30,
+        help="Max LLM turns per step (for generation)",
+    )
+    parser.add_argument(
+        "--sandbox",
+        action="store_true",
+        help="Use Docker sandbox",
+    )
+    args = parser.parse_args(argv)
+
+    description = args.description
+    if not description:
+        _print_step("No description provided — enter your project idea:")
+        description = input("> ").strip()
+        if not description:
+            _print_err("Description cannot be empty")
+            return 1
+
+    from ._design import run_design_flow
+
+    return run_design_flow(
+        description=description,
+        model=args.model,
+        model_provider="claude",
+        output_dir=Path(args.output_dir),
+        show_output=args.show_output,
+        spec_only=args.spec_only,
+        max_fix_attempts=args.max_fix_attempts,
+        max_turns=args.max_turns,
+        sandbox=args.sandbox,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Parse arguments and drive the full project-generation pipeline.
 
@@ -47,6 +270,16 @@ def main(argv: list[str] | None = None) -> int:
     Returns:
         Exit code (0 = success, 1 = error).
     """
+    # Route to subcommands before the main argparse.
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv and argv[0] == "improve":
+        return _run_improve_command(argv[1:])
+    if argv and argv[0] == "init":
+        return _run_init_command(argv[1:])
+    if argv and argv[0] == "design":
+        return _run_design_command(argv[1:])
+
     parser = argparse.ArgumentParser(
         description="vibegen - generate Python projects from a spec"
     )
@@ -100,7 +333,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.repair:
         repo_path = Path(args.repo_path) if args.repo_path else Path.cwd()
-        exit_code, spec, package_name = _repair_project(repo_path)
+        exit_code, spec, package_name = _repair_project(
+            repo_path,
+            model=args.model,
+            show_output=args.show_output,
+        )
         if exit_code != 0:
             return exit_code
 
@@ -149,6 +386,8 @@ def main(argv: list[str] | None = None) -> int:
                 _print_warn(f"Code generation failed: {e}")
 
         return 0
+
+    from ._analysis import _parse_spec
 
     spec_path = Path(args.spec_file)
     if not spec_path.exists():

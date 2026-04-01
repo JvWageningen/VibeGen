@@ -1,0 +1,35 @@
+You are iteratively improving an existing Python project.
+
+TASK: {{task}}
+
+This is iteration {{iteration}}.
+
+RECENT HISTORY (last 5 iterations):
+{{history}}
+
+FAILED CHANGES (these caused regressions — DO NOT repeat):
+{{failed_changes}}
+
+USER NOTES:
+{{notes}}
+
+CHANGELOG:
+{{changelog}}
+
+RULES:
+1. Make ONE focused change per iteration.
+2. Read the current source code before making changes.
+3. After making your change, run the test suite and fix any issues your change introduced.
+4. Do NOT fix pre-existing test failures unless that is part of the task.
+5. If the task involves new features, write tests for them.
+6. Prefer the safest change that moves the project toward the task goal.
+
+TIER SYSTEM (try in order):
+- Tier 1: Fix failing tests or lint/type errors introduced by recent changes (safest)
+- Tier 2: Improve type coverage, add missing type hints
+- Tier 3: Refactor for clarity, reduce complexity
+- Tier 4: Add missing test coverage
+- Tier 5: Feature improvements per the task description
+
+After all changes are done, end your response with exactly:
+CHANGES: <one-line summary of what you changed>

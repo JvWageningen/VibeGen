@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 from ._io import _print_err
@@ -224,32 +226,57 @@ def _run_claude_session(
     if system_prompt:
         cmd.extend(["--system-prompt", system_prompt])
 
-    proc = subprocess.run(
+    # Run Claude as a subprocess.  Print periodic progress messages so
+    # the user knows it has not hung — the CLI in ``-p --output-format
+    # json`` mode produces no output until it finishes.
+    proc = subprocess.Popen(
         cmd,
-        input=prompt,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=None,  # Inherits parent stderr
         text=True,
-        capture_output=True,
-        check=False,
         encoding="utf-8",
         cwd=cwd,
     )
 
+    stop_event = threading.Event()
+
+    def _progress_ticker() -> None:
+        """Print elapsed time every 10 s so the user sees activity."""
+        start = time.monotonic()
+        while not stop_event.wait(10):
+            elapsed = int(time.monotonic() - start)
+            mins, secs = divmod(elapsed, 60)
+            sys.stderr.write(f"\r  Claude working… {mins}m {secs:02d}s   ")
+            sys.stderr.flush()
+        sys.stderr.write("\r" + " " * 40 + "\r")
+        sys.stderr.flush()
+
+    ticker = threading.Thread(target=_progress_ticker, daemon=True)
+    ticker.start()
+
+    try:
+        stdout, stderr = proc.communicate(input=prompt)
+    finally:
+        stop_event.set()
+        ticker.join(timeout=2)
+
     result_text = ""
     session_id = ""
 
-    if proc.stdout:
+    if stdout:
         try:
-            data = json.loads(proc.stdout)
+            data = json.loads(stdout)
             result_text = data.get("result", "")
             session_id = data.get("session_id", "")
         except json.JSONDecodeError:
-            result_text = proc.stdout
+            result_text = stdout
             _print_err("Failed to parse Claude JSON output")
 
     if proc.returncode != 0:
         _print_err(f"Claude CLI exited with code {proc.returncode}")
-        if proc.stderr:
-            _print_err(proc.stderr[:500])
+        if stderr:
+            _print_err(stderr[:500])
 
     if show_output and result_text:
         print(result_text)

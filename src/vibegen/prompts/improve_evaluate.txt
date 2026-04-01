@@ -1,0 +1,36 @@
+You just completed iteration {{iteration}} of an iterative improvement loop.
+
+TASK: {{task}}
+
+CHANGES MADE THIS ITERATION:
+{{changes_summary}}
+
+GIT DIFF OF CHANGES:
+{{diff}}
+
+VERIFICATION OUTPUT:
+
+pytest:
+{{pytest_output}}
+
+ruff:
+{{ruff_output}}
+
+mypy:
+{{mypy_output}}
+
+PREVIOUS ITERATION HISTORY:
+{{history}}
+
+Evaluate whether this iteration was an improvement, neutral, or a regression.
+
+Consider:
+- Did the changes move toward the task goal?
+- Are new test failures caused by the changes (regression) or pre-existing?
+- Did code quality improve or degrade?
+- Is the change meaningful progress, or just noise?
+
+Respond with EXACTLY this JSON and nothing else:
+{"verdict": "improvement", "reasoning": "one sentence explanation"}
+
+Valid verdicts: "improvement", "neutral", "regression"
