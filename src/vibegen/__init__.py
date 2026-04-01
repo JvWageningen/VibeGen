@@ -1,3 +1,3 @@
 """VibeGen: Cross-platform Python project generator powered by Claude Code."""
 
-__version__ = "0.3.1"
+__version__ = "1.0.0"
