@@ -1,6 +1,6 @@
 [project]
 name = "vibegen"
-version = "0.3.0"
+version = "0.3.1"
 description = "Cross-platform Python project generator powered by Claude Code."
 authors = [
     { name = "Jeroen", email = "jeroen@vwageningen.com" }
