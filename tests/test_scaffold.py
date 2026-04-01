@@ -18,11 +18,14 @@ from vibegen._scaffold import (
     _init_git,
     _update_pyproject_tools,
     _write_ci_workflow,
+    _write_claude_hooks,
     _write_claude_md,
     _write_claude_settings,
+    _write_claudeignore,
     _write_conftest,
     _write_gitattributes,
     _write_gitignore,
+    _write_mcp_config,
     _write_pre_commit_config,
 )
 
@@ -167,6 +170,12 @@ def test_write_gitignore_contains_pycache(tmp_path: Path) -> None:
     _write_gitignore(tmp_path)
     content = (tmp_path / ".gitignore").read_text(encoding="utf-8")
     assert "__pycache__" in content
+
+
+def test_write_gitignore_excludes_fuse_hidden(tmp_path: Path) -> None:
+    _write_gitignore(tmp_path)
+    content = (tmp_path / ".gitignore").read_text(encoding="utf-8")
+    assert ".claude/.fuse_hidden*" in content
 
 
 # ---------------------------------------------------------------------------
@@ -415,6 +424,158 @@ def test_write_claude_settings_has_ask_rules(tmp_path: Path) -> None:
     assert "Bash(rm *)" in ask
     assert "Bash(git reset *)" in ask
     assert "Bash(docker *)" in ask
+
+
+def test_write_claude_settings_creates_shared_settings_json(tmp_path: Path) -> None:
+    _write_claude_settings(tmp_path)
+    assert (tmp_path / ".claude" / "settings.json").exists()
+
+
+def test_write_claude_settings_shared_has_autocompact_env(tmp_path: Path) -> None:
+    _write_claude_settings(tmp_path)
+    data = json.loads(
+        (tmp_path / ".claude" / "settings.json").read_text(encoding="utf-8")
+    )
+    assert data["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] == "50"
+
+
+def test_write_claude_settings_shared_has_pretooluse_hook(tmp_path: Path) -> None:
+    _write_claude_settings(tmp_path)
+    data = json.loads(
+        (tmp_path / ".claude" / "settings.json").read_text(encoding="utf-8")
+    )
+    pre = data["hooks"]["PreToolUse"]
+    matchers = [h["matcher"] for h in pre]
+    assert "Read" in matchers
+
+
+def test_write_claude_settings_shared_has_posttooluse_hook(tmp_path: Path) -> None:
+    _write_claude_settings(tmp_path)
+    data = json.loads(
+        (tmp_path / ".claude" / "settings.json").read_text(encoding="utf-8")
+    )
+    post = data["hooks"]["PostToolUse"]
+    matchers = [h["matcher"] for h in post]
+    assert "Bash" in matchers
+
+
+def test_write_claude_settings_local_has_opusplan_model(tmp_path: Path) -> None:
+    _write_claude_settings(tmp_path)
+    data = json.loads(
+        (tmp_path / ".claude" / "settings.local.json").read_text(encoding="utf-8")
+    )
+    assert data["model"] == "opusplan"
+
+
+def test_write_claude_settings_local_has_token_env_vars(tmp_path: Path) -> None:
+    _write_claude_settings(tmp_path)
+    data = json.loads(
+        (tmp_path / ".claude" / "settings.local.json").read_text(encoding="utf-8")
+    )
+    assert data["env"]["MAX_THINKING_TOKENS"] == "10000"
+    assert data["env"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "haiku"
+
+
+# ---------------------------------------------------------------------------
+# _write_claude_hooks
+# ---------------------------------------------------------------------------
+
+
+def test_write_claude_hooks_creates_file(tmp_path: Path) -> None:
+    _write_claude_hooks(tmp_path)
+    assert (tmp_path / ".claude" / "hooks" / "read_once.py").exists()
+
+
+def test_write_claude_hooks_is_valid_python(tmp_path: Path) -> None:
+    _write_claude_hooks(tmp_path)
+    content = (tmp_path / ".claude" / "hooks" / "read_once.py").read_text(
+        encoding="utf-8"
+    )
+    compile(content, "read_once.py", "exec")  # raises SyntaxError if invalid
+
+
+def test_write_claude_hooks_blocks_redundant_reads(tmp_path: Path) -> None:
+    _write_claude_hooks(tmp_path)
+    content = (tmp_path / ".claude" / "hooks" / "read_once.py").read_text(
+        encoding="utf-8"
+    )
+    assert "decision" in content
+    assert "block" in content
+    assert "approve" in content
+
+
+def test_write_claude_hooks_tracks_offset_and_limit(tmp_path: Path) -> None:
+    _write_claude_hooks(tmp_path)
+    content = (tmp_path / ".claude" / "hooks" / "read_once.py").read_text(
+        encoding="utf-8"
+    )
+    assert "offset" in content
+    assert "limit" in content
+
+
+# ---------------------------------------------------------------------------
+# _write_claudeignore
+# ---------------------------------------------------------------------------
+
+
+def test_write_claudeignore_creates_file(tmp_path: Path) -> None:
+    _write_claudeignore(tmp_path)
+    assert (tmp_path / ".claudeignore").exists()
+
+
+def test_write_claudeignore_excludes_pycache(tmp_path: Path) -> None:
+    _write_claudeignore(tmp_path)
+    content = (tmp_path / ".claudeignore").read_text(encoding="utf-8")
+    assert "__pycache__/" in content
+
+
+def test_write_claudeignore_excludes_venv(tmp_path: Path) -> None:
+    _write_claudeignore(tmp_path)
+    content = (tmp_path / ".claudeignore").read_text(encoding="utf-8")
+    assert ".venv/" in content
+
+
+def test_write_claudeignore_excludes_lock_file(tmp_path: Path) -> None:
+    _write_claudeignore(tmp_path)
+    content = (tmp_path / ".claudeignore").read_text(encoding="utf-8")
+    assert "uv.lock" in content
+
+
+def test_write_claudeignore_excludes_build_artifacts(tmp_path: Path) -> None:
+    _write_claudeignore(tmp_path)
+    content = (tmp_path / ".claudeignore").read_text(encoding="utf-8")
+    assert "build/" in content
+    assert "dist/" in content
+
+
+# ---------------------------------------------------------------------------
+# _write_mcp_config
+# ---------------------------------------------------------------------------
+
+
+def test_write_mcp_config_creates_file(tmp_path: Path) -> None:
+    _write_mcp_config(tmp_path)
+    assert (tmp_path / ".mcp.json").exists()
+
+
+def test_write_mcp_config_valid_json(tmp_path: Path) -> None:
+    _write_mcp_config(tmp_path)
+    data = json.loads((tmp_path / ".mcp.json").read_text(encoding="utf-8"))
+    assert isinstance(data, dict)
+
+
+def test_write_mcp_config_has_tree_sitter(tmp_path: Path) -> None:
+    _write_mcp_config(tmp_path)
+    data = json.loads((tmp_path / ".mcp.json").read_text(encoding="utf-8"))
+    assert "tree-sitter-mcp" in data
+    assert data["tree-sitter-mcp"]["command"] == "npx"
+
+
+def test_write_mcp_config_has_ast_grep(tmp_path: Path) -> None:
+    _write_mcp_config(tmp_path)
+    data = json.loads((tmp_path / ".mcp.json").read_text(encoding="utf-8"))
+    assert "ast-grep" in data
+    assert data["ast-grep"]["command"] == "npx"
 
 
 # ---------------------------------------------------------------------------

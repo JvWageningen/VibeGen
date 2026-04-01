@@ -2,7 +2,7 @@
   "permissions": {
     "allow": [
       "Bash(*)",
-      "Bash(uv run python -c \":*)",
+      "Bash(uv run python -c :*)",
       "WebSearch"
     ],
     "deny": [
@@ -29,5 +29,10 @@
       "Bash(npm install *)",
       "Bash(docker *)"
     ]
-  }
+  },
+  "env": {
+    "MAX_THINKING_TOKENS": "10000",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "haiku"
+  },
+  "model": "opusplan"
 }

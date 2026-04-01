@@ -13,3 +13,4 @@ build/
 .env
 .env.*
 .DS_Store
+.claude/.fuse_hidden*

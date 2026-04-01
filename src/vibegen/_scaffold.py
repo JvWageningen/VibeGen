@@ -92,54 +92,237 @@ After any code change, always:
     _write_file(project_path / "CLAUDE.md", content)
 
 
-def _write_claude_settings(project_path: Path) -> None:
-    """Write ``.claude/settings.local.json`` with default permissions.
+_CLAUDE_PERMISSIONS: dict[str, list[str]] = {
+    "allow": [
+        "Bash(*)",
+        "Bash(uv run python -c :*)",
+        "WebSearch",
+    ],
+    "deny": [
+        "Bash(rm -rf /)",
+        "Bash(rm -rf /*)",
+        "Bash(sudo *)",
+        "Bash(shutdown *)",
+        "Bash(reboot *)",
+        "Bash(poweroff *)",
+        "Bash(dd *)",
+        "Bash(mkfs *)",
+    ],
+    "ask": [
+        "Bash(rm *)",
+        "Bash(rmdir *)",
+        "Bash(mv *)",
+        "Bash(cp -r *)",
+        "Bash(git reset *)",
+        "Bash(git clean *)",
+        "Bash(git checkout *)",
+        "Bash(git branch -D *)",
+        "Bash(pip install *)",
+        "Bash(uv pip install *)",
+        "Bash(npm install *)",
+        "Bash(docker *)",
+    ],
+}
 
-    Configures Claude Code with sensible allow/deny/ask rules so the
-    generated project is immediately usable with Claude Code.
+
+def _write_claude_settings(project_path: Path) -> None:
+    """Write ``.claude/settings.json`` and ``.claude/settings.local.json``.
+
+    ``settings.json`` holds shared config (permissions, autocompact, hooks).
+    ``settings.local.json`` holds personal token-saving defaults (model,
+    thinking cap, subagent model) that users can override for their own setup.
 
     Args:
         project_path: Project root directory.
     """
     claude_dir = project_path / ".claude"
     _ensure_directory(claude_dir)
-    settings = {
-        "permissions": {
-            "allow": [
-                "Bash(*)",
-                "Bash(uv run python -c :*)",
-                "WebSearch",
+
+    shared: dict[str, object] = {
+        "permissions": _CLAUDE_PERMISSIONS,
+        "env": {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"},
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "Read",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "python3 .claude/hooks/read_once.py",
+                        }
+                    ],
+                }
             ],
-            "deny": [
-                "Bash(rm -rf /)",
-                "Bash(rm -rf /*)",
-                "Bash(sudo *)",
-                "Bash(shutdown *)",
-                "Bash(reboot *)",
-                "Bash(poweroff *)",
-                "Bash(dd *)",
-                "Bash(mkfs *)",
+            "PostToolUse": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": (
+                                "output=$(cat /dev/stdin); "
+                                "lines=$(echo \"$output\" | wc -l); "
+                                "if [ \"$lines\" -gt 200 ]; then "
+                                "echo \"$output\" | head -100; "
+                                "echo ''; "
+                                "echo \"... ($lines lines, middle truncated) ...\"; "
+                                "echo ''; "
+                                "echo \"$output\" | tail -50; "
+                                "else echo \"$output\"; fi"
+                            ),
+                        }
+                    ],
+                }
             ],
-            "ask": [
-                "Bash(rm *)",
-                "Bash(rmdir *)",
-                "Bash(mv *)",
-                "Bash(cp -r *)",
-                "Bash(git reset *)",
-                "Bash(git clean *)",
-                "Bash(git checkout *)",
-                "Bash(git branch -D *)",
-                "Bash(pip install *)",
-                "Bash(uv pip install *)",
-                "Bash(npm install *)",
-                "Bash(docker *)",
-            ],
-        }
+        },
     }
-    _write_file(
-        claude_dir / "settings.local.json",
-        json.dumps(settings, indent=2),
-    )
+    _write_file(claude_dir / "settings.json", json.dumps(shared, indent=2))
+
+    local: dict[str, object] = {
+        "permissions": _CLAUDE_PERMISSIONS,
+        "env": {
+            "MAX_THINKING_TOKENS": "10000",
+            "CLAUDE_CODE_SUBAGENT_MODEL": "haiku",
+        },
+        "model": "opusplan",
+    }
+    _write_file(claude_dir / "settings.local.json", json.dumps(local, indent=2))
+
+
+def _write_claude_hooks(project_path: Path) -> None:
+    """Write ``.claude/hooks/read_once.py`` to block redundant file reads.
+
+    The hook tracks which file paths (with offset/limit) have been read in
+    the current session and blocks re-reads to avoid wasting context tokens.
+
+    Args:
+        project_path: Project root directory.
+    """
+    hooks_dir = project_path / ".claude" / "hooks"
+    _ensure_directory(hooks_dir)
+    script = '''\
+#!/usr/bin/env python3
+"""PreToolUse hook: block redundant Read calls to the same file+range."""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+
+STATE_FILE = "/tmp/.claude_read_once_state.json"
+MAX_AGE_SECONDS = 6 * 3600
+
+
+def _load_state() -> dict:
+    if not os.path.exists(STATE_FILE):
+        return {"seen": {}}
+    try:
+        age = time.time() - os.path.getmtime(STATE_FILE)
+        if age > MAX_AGE_SECONDS:
+            return {"seen": {}}
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {"seen": {}}
+
+
+def _save_state(state: dict) -> None:
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f)
+
+
+def main() -> None:
+    data = json.load(sys.stdin)
+    tool_input = data.get("tool_input", {})
+    file_path = tool_input.get("file_path", "")
+    offset = tool_input.get("offset", 0)
+    limit = tool_input.get("limit", 0)
+
+    key = f"{file_path}:{offset}:{limit}"
+
+    state = _load_state()
+    seen: dict[str, int] = state.get("seen", {})
+
+    if key in seen:
+        json.dump(
+            {
+                "decision": "block",
+                "reason": f"Already read: {file_path} (offset={offset}, limit={limit})",
+            },
+            sys.stdout,
+        )
+    else:
+        seen[key] = int(time.time())
+        state["seen"] = seen
+        _save_state(state)
+        json.dump({"decision": "approve"}, sys.stdout)
+
+
+if __name__ == "__main__":
+    main()
+'''
+    _write_file(hooks_dir / "read_once.py", script)
+
+
+def _write_claudeignore(project_path: Path) -> None:
+    """Write ``.claudeignore`` to exclude generated/cache directories.
+
+    Claude Code does not read ``.gitignore``, so this file explicitly
+    prevents it from indexing cache dirs, lock files, and build artifacts.
+
+    Args:
+        project_path: Project root directory.
+    """
+    content = """\
+# Cache directories
+__pycache__/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Virtual environment
+.venv/
+
+# Lock file (machine-generated)
+uv.lock
+
+# Compiled Python
+*.pyc
+*.pyo
+
+# FUSE artifacts
+.fuse_hidden*
+"""
+    _write_file(project_path / ".claudeignore", content)
+
+
+def _write_mcp_config(project_path: Path) -> None:
+    """Write ``.mcp.json`` with code-intelligence MCP servers.
+
+    Provides tree-sitter (semantic search) and ast-grep (structural pattern
+    matching) for projects with complex codebases. Requires Node.js/npx;
+    Claude Code falls back to built-in tools if unavailable.
+
+    Args:
+        project_path: Project root directory.
+    """
+    config = {
+        "tree-sitter-mcp": {
+            "command": "npx",
+            "args": ["@nendo/tree-sitter-mcp", "--mcp"],
+        },
+        "ast-grep": {
+            "command": "npx",
+            "args": ["@notprolands/ast-grep-mcp"],
+        },
+    }
+    _write_file(project_path / ".mcp.json", json.dumps(config, indent=2))
 
 
 def _copy_claude_commands(project_path: Path) -> None:
@@ -232,27 +415,47 @@ def _create_vscode_settings(project_path: Path) -> None:
 
 
 def _write_gitignore(project_path: Path) -> None:
-    """Write a standard Python `.gitignore`.
+    """Ensure a `.gitignore` contains all standard Python entries.
+
+    Merges required entries into an existing file rather than overwriting.
 
     Args:
         project_path: Project root directory.
     """
-    content = """__pycache__/
-*.py[cod]
-*$py.class
-.venv/
-dist/
-build/
-*.egg-info/
-.mypy_cache/
-.pytest_cache/
-.ruff_cache/
-*.log
-.env
-.env.*
-.DS_Store
-"""
-    _write_file(project_path / ".gitignore", content)
+    required = [
+        "__pycache__/",
+        "*.py[cod]",
+        "*$py.class",
+        ".venv/",
+        "dist/",
+        "build/",
+        "*.egg-info/",
+        ".mypy_cache/",
+        ".pytest_cache/",
+        ".ruff_cache/",
+        "*.log",
+        ".env",
+        ".env.*",
+        ".DS_Store",
+        ".claude/.fuse_hidden*",
+    ]
+    gitignore = project_path / ".gitignore"
+    existing: set[str] = set()
+    if gitignore.exists():
+        existing = {
+            line.strip()
+            for line in gitignore.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.startswith("#")
+        }
+    missing = [entry for entry in required if entry not in existing]
+    if not missing and gitignore.exists():
+        return
+    if gitignore.exists():
+        text = gitignore.read_text(encoding="utf-8").rstrip("\n")
+        text += "\n\n# Added by vibegen\n" + "\n".join(missing) + "\n"
+    else:
+        text = "\n".join(required) + "\n"
+    _write_file(gitignore, text)
 
 
 def _write_gitattributes(project_path: Path) -> None:
@@ -317,7 +520,9 @@ def _ensure_package_dir(project_path: Path, package_name: str) -> Path:
 
 
 def _update_pyproject_tools(project_path: Path) -> None:
-    """Append ruff / pytest / mypy / bandit / vulture tool config if absent.
+    """Ensure ruff / pytest / mypy / bandit / vulture tool config is present.
+
+    Only appends sections that are missing, preserving existing config.
 
     Args:
         project_path: Project root directory.
@@ -327,38 +532,50 @@ def _update_pyproject_tools(project_path: Path) -> None:
         return
 
     text = pyproject_path.read_text(encoding="utf-8")
-    if "[tool.ruff]" in text:
-        return
+    additions: list[str] = []
 
-    tool_config = """
-[tool.ruff]
-line-length = 88
-target-version = "py312"
+    tool_sections: list[tuple[str, str]] = [
+        (
+            "[tool.ruff]",
+            "[tool.ruff]\n"
+            "line-length = 88\n"
+            'target-version = "py312"\n'
+            "\n"
+            "[tool.ruff.lint]\n"
+            'select = ["E", "F", "I", "UP", "B", "SIM", "N"]\n'
+            "\n"
+            "[tool.ruff.format]\n"
+            "docstring-code-format = true\n",
+        ),
+        (
+            "[tool.pytest",
+            "[tool.pytest.ini_options]\n"
+            'testpaths = ["tests"]\n'
+            'addopts = "-ra -q --strict-markers --tb=short"\n',
+        ),
+        (
+            "[tool.mypy]",
+            "[tool.mypy]\n"
+            "strict = true\n"
+            "warn_return_any = true\n"
+            "disallow_untyped_defs = true\n",
+        ),
+        (
+            "[tool.bandit]",
+            '[tool.bandit]\nexclude_dirs = ["tests", ".venv"]\nskips = ["B101"]\n',
+        ),
+        (
+            "[tool.vulture]",
+            '[tool.vulture]\nmin_confidence = 80\npaths = ["src/"]\n',
+        ),
+    ]
 
-[tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "N"]
+    for marker, section in tool_sections:
+        if marker not in text:
+            additions.append(section)
 
-[tool.ruff.format]
-docstring-code-format = true
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-ra -q --strict-markers --tb=short"
-
-[tool.mypy]
-strict = true
-warn_return_any = true
-disallow_untyped_defs = true
-
-[tool.bandit]
-exclude_dirs = ["tests", ".venv"]
-skips = ["B101"]
-
-[tool.vulture]
-min_confidence = 80
-paths = ["src/"]
-"""
-    _write_file(pyproject_path, text + tool_config)
+    if additions:
+        _write_file(pyproject_path, text.rstrip() + "\n\n" + "\n".join(additions))
 
 
 def _write_conftest(project_path: Path, package_name: str) -> None:
@@ -514,7 +731,11 @@ def _copy_docs(project_path: Path, spec_path: Path, doc_files: list[str]) -> Non
 def _generate_readme(
     project_path: Path, spec: dict[str, Any], package_name: str
 ) -> None:
-    """Write a comprehensive README.md.
+    """Write a comprehensive README.md for a newly generated project.
+
+    For new projects this writes a full template. For existing projects
+    with a README already present, use :func:`_update_readme_with_claude`
+    instead to intelligently merge changes.
 
     Args:
         project_path: Project root directory.
@@ -575,6 +796,78 @@ tests/
 MIT
 """
     _write_file(project_path / "README.md", content)
+
+
+def _update_readme_with_claude(
+    project_path: Path,
+    project_name: str,
+    package_name: str,
+    model: str = "claude-sonnet-4-6",
+    show_output: bool = False,
+) -> bool:
+    """Use Claude to intelligently update an existing README.md.
+
+    Asks Claude to read the current project structure, source code,
+    and existing README, then update it to accurately reflect the
+    project while preserving user-written content.
+
+    If no README exists, Claude generates one from scratch based on
+    the project contents.
+
+    Args:
+        project_path: Project root directory.
+        project_name: Human-readable project name.
+        package_name: Python package name (snake_case).
+        model: Claude model identifier.
+        show_output: Show full Claude output.
+
+    Returns:
+        True on success, False on failure.
+    """
+    from ._llm import _run_claude_session
+
+    readme_path = project_path / "README.md"
+    existing = ""
+    if readme_path.exists():
+        existing = readme_path.read_text(encoding="utf-8")
+
+    action = "Update" if existing else "Generate"
+    prompt = (
+        f"{action} the README.md for this project.\n\n"
+        f"Project name: {project_name}\n"
+        f"Package: {package_name}\n\n"
+    )
+    if existing:
+        prompt += (
+            "The current README.md is below. Preserve any user-written "
+            "content, links, badges, and custom sections. Update the "
+            "installation, usage, project structure, and development "
+            "sections to accurately reflect the current codebase. "
+            "Add a Development section with uv run commands for pytest, "
+            "ruff, mypy if missing.\n\n"
+            f"Current README.md:\n```\n{existing[:3000]}\n```\n"
+        )
+    else:
+        prompt += (
+            "There is no README.md yet. Read the project source code "
+            "and generate a comprehensive README with: project "
+            "description, installation (uv sync), usage examples, "
+            "development commands (pytest, ruff, mypy), and project "
+            "structure."
+        )
+
+    try:
+        _run_claude_session(
+            prompt=prompt,
+            model=model,
+            cwd=project_path,
+            permission_mode="acceptEdits",
+            show_output=show_output,
+        )
+        return True
+    except Exception:  # noqa: BLE001
+        _print_warn("Claude README update failed — writing template")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -660,14 +953,22 @@ def _detect_package_name(project_path: Path) -> str | None:
 
 def _repair_project(
     project_path: Path,
+    model: str = "claude-sonnet-4-6",
+    show_output: bool = False,
 ) -> tuple[int, dict[str, Any], str]:
     """Re-apply scaffold files to an existing project.
 
     Reads the current project structure, then writes/overwrites all scaffold
     files so the project matches a freshly generated vibegen project.
+    Uses Claude to intelligently update the README when one already exists.
+
+    Additive operations (gitignore, pyproject.toml tool sections) merge into
+    existing files rather than overwriting.
 
     Args:
         project_path: Path to the existing project root directory.
+        model: Claude model identifier for README generation.
+        show_output: Show full Claude output.
 
     Returns:
         Tuple of (exit_code, spec_dict, package_name).
@@ -711,16 +1012,25 @@ def _repair_project(
     _print_ok("Written: CLAUDE.md")
 
     _write_claude_settings(project_path)
-    _print_ok("Written: .claude/settings.local.json")
+    _print_ok("Written: .claude/settings.json & .claude/settings.local.json")
+
+    _write_claude_hooks(project_path)
+    _print_ok("Written: .claude/hooks/read_once.py")
 
     _copy_claude_commands(project_path)
     _print_ok("Written: .claude/commands/")
+
+    _write_claudeignore(project_path)
+    _print_ok("Written: .claudeignore")
+
+    _write_mcp_config(project_path)
+    _print_ok("Written: .mcp.json")
 
     _create_vscode_settings(project_path)
     _print_ok("Written: .vscode/settings.json")
 
     _write_gitignore(project_path)
-    _print_ok("Written: .gitignore")
+    _print_ok("Updated: .gitignore")
 
     _write_gitattributes(project_path)
     _print_ok("Written: .gitattributes")
@@ -744,8 +1054,36 @@ def _repair_project(
     _write_ci_workflow(project_path, python_version)
     _print_ok("Written: .github/workflows/ci.yml")
 
-    _generate_readme(project_path, spec, package_name)
-    _print_ok("Written: README.md")
+    # Use Claude to update README if one already exists; fall back to template.
+    readme_exists = (project_path / "README.md").exists()
+    if readme_exists:
+        _print_step("Updating README.md with Claude...")
+        ok = _update_readme_with_claude(
+            project_path,
+            project_name,
+            package_name,
+            model=model,
+            show_output=show_output,
+        )
+        if ok:
+            _print_ok("Updated: README.md (via Claude)")
+        else:
+            _generate_readme(project_path, spec, package_name)
+            _print_ok("Written: README.md (template fallback)")
+    else:
+        _print_step("Generating README.md with Claude...")
+        ok = _update_readme_with_claude(
+            project_path,
+            project_name,
+            package_name,
+            model=model,
+            show_output=show_output,
+        )
+        if ok:
+            _print_ok("Generated: README.md (via Claude)")
+        else:
+            _generate_readme(project_path, spec, package_name)
+            _print_ok("Written: README.md (template fallback)")
 
     try:
         _run_cmd(["git", "add", "-A"], cwd=project_path, check=False)

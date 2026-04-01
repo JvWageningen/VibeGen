@@ -42,13 +42,13 @@ Cross-platform Python project generator powered by Claude Code.
 
 ## Commit Message Style
 
-Follow Conventional Commits:
+Follow Conventional Commits: `feat:`, `fix:`, `chore:`, `test:`, `docs:`
 
-- `feat:` new feature
-- `fix:` bug fix
-- `chore:` maintenance (scaffold, config, tooling)
-- `test:` test changes
-- `docs:` documentation only
+## Efficiency
+
+- Read specific line ranges (offset/limit), not whole files. Use Grep before Read.
+- Batch independent tool calls into single messages.
+- Use /compact at logical breakpoints. Never let context exceed ~200K.
 
 ## Verification
 After any code change, always:
