@@ -3,7 +3,10 @@
     "allow": [
       "Bash(*)",
       "Bash(uv run python -c :*)",
-      "WebSearch"
+      "WebSearch",
+      "WebFetch(*)",
+      "Read",
+      "Write(/path*)"
     ],
     "deny": [
       "Bash(rm -rf /)",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import shutil
@@ -64,6 +65,7 @@ def _write_claude_md(project_path: Path, spec: dict[str, Any]) -> None:
 - `uv run pip-audit` - dependency vulnerability check
 - `uv run radon cc src/ -mi C` - complexity report
 - `uv run vulture src/` - unused code detection
+- `cymbal index .` - (re)index codebase for cymbal
 
 ## Code Style Rules
 - Always add type hints to function signatures
@@ -76,6 +78,25 @@ def _write_claude_md(project_path: Path, spec: dict[str, Any]) -> None:
 - snake_case for files, modules, functions, variables
 - PascalCase for classes
 - UPPER_SNAKE_CASE for constants
+
+## Efficiency
+- Read specific line ranges (offset/limit), not whole files. Use Grep before Read.
+- Batch independent tool calls into single messages.
+- Use /compact at logical breakpoints. Never let context exceed ~200K.
+
+## Code Exploration Policy
+Use `cymbal` CLI for code navigation — prefer it over Read, Grep, Glob, or Bash for code exploration.
+- **New to a repo?**: `cymbal structure` — entry points, hotspots, central packages. Start here.
+- **To understand a symbol**: `cymbal investigate <symbol>` — returns source, callers, impact, or members based on what the symbol is.
+- **To understand multiple symbols**: `cymbal investigate Foo Bar Baz` — batch mode, one invocation.
+- **To trace an execution path**: `cymbal trace <symbol>` — follows the call graph downward.
+- **To assess change risk**: `cymbal impact <symbol>` — follows the call graph upward.
+- Before reading a file: `cymbal outline <file>` or `cymbal show <file:L1-L2>`
+- Before searching: `cymbal search <query>` (symbols) or `cymbal search <query> --text` (grep)
+- Before exploring structure: `cymbal ls` (tree) or `cymbal ls --stats` (overview)
+- To disambiguate: `cymbal show path/to/file.py:SymbolName` or `cymbal investigate file.py:Symbol`
+- First run: `cymbal index .` to build the initial index (<1s). After that, queries auto-refresh.
+- All commands support `--json` for structured output.
 
 ## Verification
 After any code change, always:
@@ -161,14 +182,14 @@ def _write_claude_settings(project_path: Path) -> None:
                             "type": "command",
                             "command": (
                                 "output=$(cat /dev/stdin); "
-                                "lines=$(echo \"$output\" | wc -l); "
-                                "if [ \"$lines\" -gt 200 ]; then "
-                                "echo \"$output\" | head -100; "
+                                'lines=$(echo "$output" | wc -l); '
+                                'if [ "$lines" -gt 200 ]; then '
+                                'echo "$output" | head -100; '
                                 "echo ''; "
-                                "echo \"... ($lines lines, middle truncated) ...\"; "
+                                'echo "... ($lines lines, middle truncated) ..."; '
                                 "echo ''; "
-                                "echo \"$output\" | tail -50; "
-                                "else echo \"$output\"; fi"
+                                'echo "$output" | tail -50; '
+                                'else echo "$output"; fi'
                             ),
                         }
                     ],
@@ -179,7 +200,6 @@ def _write_claude_settings(project_path: Path) -> None:
     _write_file(claude_dir / "settings.json", json.dumps(shared, indent=2))
 
     local: dict[str, object] = {
-        "permissions": _CLAUDE_PERMISSIONS,
         "env": {
             "MAX_THINKING_TOKENS": "10000",
             "CLAUDE_CODE_SUBAGENT_MODEL": "haiku",
@@ -540,6 +560,7 @@ def _update_pyproject_tools(project_path: Path) -> None:
             "[tool.ruff]\n"
             "line-length = 88\n"
             'target-version = "py312"\n'
+            'extend-exclude = [".claude"]\n'
             "\n"
             "[tool.ruff.lint]\n"
             'select = ["E", "F", "I", "UP", "B", "SIM", "N"]\n'
@@ -951,6 +972,69 @@ def _detect_package_name(project_path: Path) -> str | None:
     return None
 
 
+def _write_docs_reference(project_path: Path, spec: dict[str, Any]) -> None:
+    """Write initial docs/reference/ with ARCHITECTURE.md and CHANGELOG.md.
+
+    Args:
+        project_path: Project root directory.
+        spec: Parsed spec dict (from ``_parse_spec``).
+    """
+    ref_dir = project_path / "docs" / "reference"
+    _ensure_directory(ref_dir)
+
+    pkg = spec["project_name"].lower().replace("-", "_")
+    today = datetime.date.today().isoformat()
+    description = spec.get("description", "<!-- TODO: Describe the system -->")
+
+    arch_content = f"""# {spec["project_name"]} Architecture
+
+## Overview
+{description}
+
+## Module Map
+| Module | Description |
+|--------|-------------|
+| `src/{pkg}/` | Main package |
+
+## Key Design Decisions
+<!-- Document important architectural choices and their rationale -->
+
+---
+*Run `/docs:doc-repo` to auto-generate detailed documentation.*
+*Run `cymbal structure` to see entry points, hotspots, and central packages.*
+"""
+
+    changelog_content = f"""# Changelog
+All notable changes to this project will be documented in this file.
+Format: [Keep a Changelog](https://keepachangelog.com)
+
+## [0.1.0] - {today}
+
+### Added
+- Initial project scaffold via VibeGen
+"""
+
+    _write_file(ref_dir / "ARCHITECTURE.md", arch_content)
+    _write_file(ref_dir / "CHANGELOG.md", changelog_content)
+
+
+def _run_cymbal_index(project_path: Path) -> None:
+    """Run ``cymbal index .`` in *project_path* if cymbal is installed.
+
+    Non-fatal: silently skips if cymbal is not on PATH.
+
+    Args:
+        project_path: Project root directory to index.
+    """
+    if not shutil.which("cymbal"):
+        return
+    try:
+        _run_cmd(["cymbal", "index", "."], cwd=project_path, check=False)
+        _print_ok("cymbal: codebase indexed")
+    except Exception:  # noqa: BLE001
+        _print_warn("cymbal index failed; skipping")
+
+
 def _repair_project(
     project_path: Path,
     model: str = "claude-sonnet-4-6",
@@ -1019,6 +1103,9 @@ def _repair_project(
 
     _copy_claude_commands(project_path)
     _print_ok("Written: .claude/commands/")
+
+    _write_docs_reference(project_path, spec)
+    _print_ok("Written: docs/reference/ARCHITECTURE.md & CHANGELOG.md")
 
     _write_claudeignore(project_path)
     _print_ok("Written: .claudeignore")
@@ -1096,4 +1183,5 @@ def _repair_project(
     except Exception:  # noqa: BLE001
         _print_warn("Could not create git commit.")
 
+    _run_cymbal_index(project_path)
     return 0, spec, package_name

@@ -74,9 +74,7 @@ def test_append_changelog_creates_file(tmp_path: Path) -> None:
 def test_append_changelog_appends(tmp_path: Path) -> None:
     _append_changelog(tmp_path, 1, "first change")
     _append_changelog(tmp_path, 2, "second change")
-    content = (tmp_path / ".vibegen/improve/CHANGELOG.md").read_text(
-        encoding="utf-8"
-    )
+    content = (tmp_path / ".vibegen/improve/CHANGELOG.md").read_text(encoding="utf-8")
     assert "Iter 1" in content
     assert "Iter 2" in content
 

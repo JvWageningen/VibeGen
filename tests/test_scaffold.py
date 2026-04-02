@@ -402,14 +402,14 @@ def test_write_claude_settings_creates_file(tmp_path: Path) -> None:
 
 def test_write_claude_settings_valid_json(tmp_path: Path) -> None:
     _write_claude_settings(tmp_path)
-    settings_file = tmp_path / ".claude" / "settings.local.json"
+    settings_file = tmp_path / ".claude" / "settings.json"
     data = json.loads(settings_file.read_text(encoding="utf-8"))
     assert "permissions" in data
 
 
 def test_write_claude_settings_has_deny_rules(tmp_path: Path) -> None:
     _write_claude_settings(tmp_path)
-    settings_file = tmp_path / ".claude" / "settings.local.json"
+    settings_file = tmp_path / ".claude" / "settings.json"
     data = json.loads(settings_file.read_text(encoding="utf-8"))
     deny = data["permissions"]["deny"]
     assert "Bash(rm -rf /)" in deny
@@ -418,7 +418,7 @@ def test_write_claude_settings_has_deny_rules(tmp_path: Path) -> None:
 
 def test_write_claude_settings_has_ask_rules(tmp_path: Path) -> None:
     _write_claude_settings(tmp_path)
-    settings_file = tmp_path / ".claude" / "settings.local.json"
+    settings_file = tmp_path / ".claude" / "settings.json"
     data = json.loads(settings_file.read_text(encoding="utf-8"))
     ask = data["permissions"]["ask"]
     assert "Bash(rm *)" in ask

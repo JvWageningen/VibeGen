@@ -48,9 +48,14 @@ dev = [
 [tool.ruff]
 line-length = 88
 target-version = "py312"
+extend-exclude = [".claude", "tmp_pytest"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "N"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/vibegen/_scaffold.py" = ["E501"]  # template strings contain long markdown lines
+"scripts/*.py" = ["E501"]  # script files are not subject to line-length checks
 
 [tool.ruff.format]
 docstring-code-format = true

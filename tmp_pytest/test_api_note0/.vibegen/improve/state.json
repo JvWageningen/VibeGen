@@ -1,0 +1,47 @@
+{
+  "iteration": 2,
+  "max_iterations": 0,
+  "status": "running",
+  "mode": "direct",
+  "task": "improve tests",
+  "branch_name": "vibegen/improve-test",
+  "base_branch": "main",
+  "history": [
+    {
+      "iteration": 1,
+      "verdict": "improvement",
+      "verdict_reasoning": "tests pass",
+      "changes_summary": "fixed import",
+      "commit_sha": "abc1234",
+      "reverted": false,
+      "test_output": "",
+      "lint_output": "",
+      "type_output": "",
+      "timestamp": "2026-03-29T10:00:00"
+    },
+    {
+      "iteration": 2,
+      "verdict": "neutral",
+      "verdict_reasoning": "no change in metrics",
+      "changes_summary": "refactored helper",
+      "commit_sha": "def5678",
+      "reverted": false,
+      "test_output": "",
+      "lint_output": "",
+      "type_output": "",
+      "timestamp": "2026-03-29T10:30:00"
+    }
+  ],
+  "notes_for_claude": [
+    "focus on edge cases"
+  ],
+  "failed_changes": [],
+  "best_iteration": 0,
+  "consecutive_regressions": 0,
+  "consecutive_stalls": 0,
+  "claude_session_id": "",
+  "started_at": "",
+  "project_path": "C:\\Users\\wageningenj\\Documents\\Github_Projects\\VibeGen\\tmp_pytest\\test_api_note0",
+  "poll_flag_path": "",
+  "poll_interval": 60
+}

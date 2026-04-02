@@ -1,4 +1,4 @@
 Explain: $ARGUMENTS
 
-1. Read the file and any files that import from or are imported by it
-2. Explain: purpose, key functions/classes, how it fits in the system, non-obvious design decisions, potential gotchas
+Run `cymbal investigate $ARGUMENTS` for source, callers, impact, context. Fallback: read the file and its importers/imports.
+Cover: purpose, key functions/classes, system integration, non-obvious design decisions, gotchas.

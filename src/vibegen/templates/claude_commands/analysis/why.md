@@ -1,4 +1,4 @@
 Explain the root cause of: $ARGUMENTS
 
-1. Search for code that raises or produces this error; trace the execution path
-2. Explain: what it means, why it occurs, what triggers it, the recommended fix
+Run `cymbal trace` and `cymbal investigate` to follow the execution path from the error source. Fallback: search for code that raises/produces this error, trace manually.
+Explain: meaning, cause, trigger, recommended fix.

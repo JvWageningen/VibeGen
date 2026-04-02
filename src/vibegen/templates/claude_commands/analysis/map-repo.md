@@ -1,3 +1,4 @@
 Generate an architecture overview of the repository.
 
-Read all source files, CLAUDE.md, README.md; produce structured markdown (suitable for ARCHITECTURE.md) covering: module list with descriptions, dependency graph, data flow, entry points/public API, key design patterns.
+Run `cymbal structure` for entry points, hotspots, central packages. Read CLAUDE.md, README.md, docs/reference/.
+Produce structured markdown: module list with descriptions, dependency graph, data flow, entry points/public API, key design patterns.

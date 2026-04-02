@@ -1,4 +1,4 @@
 Map dependencies for: $ARGUMENTS
 
-1. Read the module; find what it imports and what imports it
-2. Show: external packages, internal module dependencies, dependents, key data flows
+Run `cymbal importers $ARGUMENTS` and `cymbal investigate $ARGUMENTS`. Fallback: read the module, trace imports manually.
+Show: external packages, internal module deps, dependents, key data flows.

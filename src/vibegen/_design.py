@@ -502,6 +502,7 @@ def _run_generation_pipeline(
         _write_claude_md,
         _write_claude_settings,
         _write_conftest,
+        _write_docs_reference,
         _write_gitattributes,
         _write_gitignore,
         _write_pre_commit_config,
@@ -547,6 +548,7 @@ def _run_generation_pipeline(
     _update_pyproject_tools(project_path)
     _write_conftest(project_path, package_name)
     _write_ci_workflow(project_path, spec["python_version"])
+    _write_docs_reference(project_path, spec)
     _copy_docs(project_path, spec_path, spec.get("doc_files", []))
     _init_git(project_path)
     _generate_readme(project_path, spec, package_name)

@@ -1,4 +1,4 @@
 Show all usages of: $ARGUMENTS
 
-1. Search the codebase for all usages; for each: file, line, calling function, how return value is used
-2. Note: most frequent call sites, unusual usages, tests that cover it
+Run `cymbal trace $ARGUMENTS` (call graph down) and `cymbal refs $ARGUMENTS` (references). Fallback: search manually.
+For each: file, line, calling function, return value usage. Note most frequent call sites, unusual usages, test coverage.

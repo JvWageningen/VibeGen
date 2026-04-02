@@ -25,11 +25,13 @@ from ._scaffold import (
     _generate_readme,
     _init_git,
     _repair_project,
+    _run_cymbal_index,
     _update_pyproject_tools,
     _write_ci_workflow,
     _write_claude_md,
     _write_claude_settings,
     _write_conftest,
+    _write_docs_reference,
     _write_gitattributes,
     _write_gitignore,
     _write_pre_commit_config,
@@ -472,6 +474,7 @@ def main(argv: list[str] | None = None) -> int:
         _update_pyproject_tools(output_dir)
         _write_conftest(output_dir, package_name)
         _write_ci_workflow(output_dir, spec["python_version"])
+        _write_docs_reference(output_dir, spec)
         _copy_docs(output_dir, spec_path, spec["doc_files"])
         _init_git(output_dir)
         _generate_readme(output_dir, spec, package_name)
@@ -488,6 +491,7 @@ def main(argv: list[str] | None = None) -> int:
 
         task_plan.complete("scaffold")
         _print_ok("Project scaffold created")
+        _run_cymbal_index(output_dir)
         save_session(output_dir, session)
 
     try:

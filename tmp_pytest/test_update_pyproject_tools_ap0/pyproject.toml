@@ -1,0 +1,30 @@
+[project]
+name = 'foo'
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+extend-exclude = [".claude"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "N"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q --strict-markers --tb=short"
+
+[tool.mypy]
+strict = true
+warn_return_any = true
+disallow_untyped_defs = true
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]
+skips = ["B101"]
+
+[tool.vulture]
+min_confidence = 80
+paths = ["src/"]

@@ -1,0 +1,20 @@
+{
+  "iteration": 0,
+  "max_iterations": 0,
+  "status": "idle",
+  "mode": "direct",
+  "task": "",
+  "branch_name": "",
+  "base_branch": "",
+  "history": [],
+  "notes_for_claude": [],
+  "failed_changes": [],
+  "best_iteration": 0,
+  "consecutive_regressions": 0,
+  "consecutive_stalls": 0,
+  "claude_session_id": "",
+  "started_at": "",
+  "project_path": "C:\\Users\\wageningenj\\Documents\\Github_Projects\\VibeGen\\tmp_pytest\\test_save_creates_directories0",
+  "poll_flag_path": "",
+  "poll_interval": 60
+}
