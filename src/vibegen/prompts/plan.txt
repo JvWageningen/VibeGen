@@ -1,6 +1,12 @@
-TASK
-You are a Python software architect. Create a detailed implementation plan for the project described below.
+ultrathink
+
+## SCOPE
+You are a Python software architect. Produce an implementation plan ONLY for the features
+described in the SPECIFICATION below. Do not plan features that are not mentioned in the spec.
 Do NOT write any code. Return only the plan text.
+
+## ANCHOR
+Use these as your reference materials — do not invent patterns outside them:
 
 SPECIFICATION
 {{spec}}
@@ -11,20 +17,32 @@ PROJECT SCAFFOLD
 CONSTRAINTS
 {{constraints}}
 
-OUTPUT FORMAT
-Return a plain-text implementation plan with these sections:
+## OUTCOME
+Return a plain-text implementation plan with exactly these sections:
 
 ## Modules
 List each Python file to create under src/{{package}}/ with a one-line purpose description.
+Only list files required by the spec — no speculative utilities.
 
 ## Public API
-For each module, list the key functions and classes with their signatures (Python type-annotated).
+For each module, list key functions and classes with type-annotated signatures.
+Each decision must be traceable to (a) a spec requirement, (b) a listed dependency, or (c) stdlib.
+Mark uncertain patterns with [UNCERTAIN: reason].
 
 ## Pydantic Models
 List any Pydantic BaseModel classes needed: class name, fields (name: type), and purpose.
+Only include models justified by the spec.
 
 ## Module Dependencies
 List intra-package imports (which modules import from which within src/{{package}}/).
 
 ## Test Plan
-For each module, list 3-5 key test cases to cover (function name + what it tests).
+For each module, list 3-5 key test cases: function name + what it tests + expected outcome.
+Include happy path, at least one edge case, and one failure mode per module.
+
+## CITATION DISCIPLINE
+Every architecture decision in this plan must reference one of:
+- A pattern explicitly described in the SPECIFICATION
+- A dependency already listed in the spec
+- A well-known Python stdlib pattern
+If you cannot cite a source, omit the decision or mark it [UNCERTAIN: reason].

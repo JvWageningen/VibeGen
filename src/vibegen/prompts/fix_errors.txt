@@ -1,7 +1,11 @@
+think
+
 {{web_context}}
-TASK
-You are a Python expert. Fix the linting errors listed below in the given source file.
-Do NOT change any logic or add features — only fix the listed errors.
+## SCOPE
+Fix the linting errors listed below in the given source file.
+Do NOT change any logic, add features, or alter docstrings or type hints — only fix the listed errors.
+
+## ANCHOR
 
 FILE PATH
 {{file_path}}
@@ -16,10 +20,17 @@ ERRORS TO FIX
 CURRENT FILE CONTENT
 {{file_content}}
 
+## OUTCOME
+Your output is correct when ALL of the following hold:
+1. Every error listed in ERRORS TO FIX is resolved.
+2. No new lint errors are introduced.
+3. All existing logic, docstrings, and type hints are unchanged.
+4. No package outside INSTALLED DEPENDENCIES is imported (use stdlib or already-imported alternatives).
+
 FIX GUIDELINES
 - F821 (undefined name): add the missing import, OR replace the undefined name with
   the correct equivalent from INSTALLED DEPENDENCIES.
-  IMPORTANT: never import a package that is not in INSTALLED DEPENDENCIES.
+  IMPORTANT: never import a package not in INSTALLED DEPENDENCIES.
   If a function uses a package not listed there, replace it with stdlib or already-
   imported alternatives (e.g. replace `typer.echo(msg)` with `print(msg)`,
   replace `typer.Exit(code=1)` with `sys.exit(1)`, etc.).
@@ -27,8 +38,6 @@ FIX GUIDELINES
   (or `raise X from None` if the original exception is irrelevant).
 - E501 (line too long): break the line at a logical boundary.
 - SIM/B/N rules: apply the suggested simplification or rename.
-- Preserve all existing logic, docstrings, and type hints exactly.
 
-OUTPUT FORMAT
 Return ONLY the complete fixed file content — no markdown fences, no --- file: ---
 wrapper, no explanations. Just the raw Python source code.

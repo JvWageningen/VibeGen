@@ -98,6 +98,16 @@ Use `cymbal` CLI for code navigation — prefer it over Read, Grep, Glob, or Bas
 - First run: `cymbal index .` to build the initial index (<1s). After that, queries auto-refresh.
 - All commands support `--json` for structured output.
 
+## Context Management
+- When fixing test failures across multiple attempts, summarise completed steps
+  rather than reprinting full file contents.
+- Prefer concise failure descriptions: test name + error message + line number.
+- If the fix loop exceeds 3 iterations, focus only on the specific failing
+  assertion — do not re-explain earlier fixes.
+- Use `cymbal` for code navigation instead of reading entire files — prefer
+  `cymbal investigate <symbol>` or `cymbal outline <file>` before any Read.
+- Run `cymbal index .` after significant code changes to refresh the index.
+
 ## Verification
 After any code change, always:
 1. Run: `uv run ruff check . --fix` and `uv run ruff format .`
@@ -116,13 +126,15 @@ After any code change, always:
 _CLAUDE_PERMISSIONS: dict[str, list[str]] = {
     "allow": [
         "Bash(*)",
-        "Bash(uv run python -c :*)",
+        "Read",
+        "Write(*)",
+        "Edit",
+        "Glob",
+        "Grep",
         "WebSearch",
+        "WebFetch(*)",
     ],
     "deny": [
-        "Bash(rm -rf /)",
-        "Bash(rm -rf /*)",
-        "Bash(sudo *)",
         "Bash(shutdown *)",
         "Bash(reboot *)",
         "Bash(poweroff *)",
@@ -130,6 +142,8 @@ _CLAUDE_PERMISSIONS: dict[str, list[str]] = {
         "Bash(mkfs *)",
     ],
     "ask": [
+        "Bash(rm -rf /)",
+        "Bash(rm -rf /*)",
         "Bash(rm *)",
         "Bash(rmdir *)",
         "Bash(mv *)",
@@ -138,10 +152,6 @@ _CLAUDE_PERMISSIONS: dict[str, list[str]] = {
         "Bash(git clean *)",
         "Bash(git checkout *)",
         "Bash(git branch -D *)",
-        "Bash(pip install *)",
-        "Bash(uv pip install *)",
-        "Bash(npm install *)",
-        "Bash(docker *)",
     ],
 }
 
@@ -160,8 +170,13 @@ def _write_claude_settings(project_path: Path) -> None:
     _ensure_directory(claude_dir)
 
     shared: dict[str, object] = {
+        "model": "opusplan",
         "permissions": _CLAUDE_PERMISSIONS,
-        "env": {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"},
+        "env": {
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50",
+            "MAX_THINKING_TOKENS": "10000",
+            "CLAUDE_CODE_SUBAGENT_MODEL": "claude-haiku-4-5-20251001",
+        },
         "hooks": {
             "PreToolUse": [
                 {
@@ -183,37 +198,51 @@ def _write_claude_settings(project_path: Path) -> None:
                             "command": (
                                 "output=$(cat /dev/stdin); "
                                 'lines=$(echo "$output" | wc -l); '
-                                'if [ "$lines" -gt 200 ]; then '
+                                "if echo \"$CLAUDE_TOOL_INPUT_COMMAND\" | grep -q 'pytest'; "
+                                "then threshold=500; else threshold=200; fi; "
+                                'if [ "$lines" -gt "$threshold" ]; then '
                                 'echo "$output" | head -100; '
                                 "echo ''; "
-                                'echo "... ($lines lines, middle truncated) ..."; '
+                                'echo "... ($lines total lines, middle truncated) ..."; '
                                 "echo ''; "
                                 'echo "$output" | tail -50; '
                                 'else echo "$output"; fi'
                             ),
                         }
                     ],
+                },
+                {
+                    "matcher": "Write|Edit",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "python3 .claude/hooks/auto_lint.py",
+                        }
+                    ],
+                },
+            ],
+            "Stop": [
+                {
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "bash .claude/hooks/verify_on_stop.sh",
+                        }
+                    ]
                 }
             ],
         },
     }
     _write_file(claude_dir / "settings.json", json.dumps(shared, indent=2))
-
-    local: dict[str, object] = {
-        "env": {
-            "MAX_THINKING_TOKENS": "10000",
-            "CLAUDE_CODE_SUBAGENT_MODEL": "haiku",
-        },
-        "model": "opusplan",
-    }
-    _write_file(claude_dir / "settings.local.json", json.dumps(local, indent=2))
+    _write_file(claude_dir / "settings.local.json", "{}\n")
 
 
 def _write_claude_hooks(project_path: Path) -> None:
-    """Write ``.claude/hooks/read_once.py`` to block redundant file reads.
+    """Write ``.claude/hooks/`` scripts for read deduplication and auto-lint.
 
-    The hook tracks which file paths (with offset/limit) have been read in
-    the current session and blocks re-reads to avoid wasting context tokens.
+    - ``read_once.py``: blocks redundant Read calls to save context tokens.
+    - ``auto_lint.py``: runs ruff on every ``.py`` file written or edited.
+    - ``verify_on_stop.sh``: runs ruff+pytest+mypy before Claude finishes.
 
     Args:
         project_path: Project root directory.
@@ -222,7 +251,12 @@ def _write_claude_hooks(project_path: Path) -> None:
     _ensure_directory(hooks_dir)
     script = '''\
 #!/usr/bin/env python3
-"""PreToolUse hook: block redundant Read calls to the same file+range."""
+"""PreToolUse hook: block redundant Read calls to the same file+range.
+
+Tracks which file paths (with offset/limit) have been read in the current
+session and blocks re-reads to avoid wasting context tokens. State is stored
+in a temp file and auto-resets after 6 hours (new session heuristic).
+"""
 from __future__ import annotations
 
 import json
@@ -242,9 +276,24 @@ def _load_state() -> dict:
         if age > MAX_AGE_SECONDS:
             return {"seen": {}}
         with open(STATE_FILE) as f:
-            return json.load(f)
+            state = json.load(f)
     except (json.JSONDecodeError, OSError):
         return {"seen": {}}
+
+    # Invalidate entries for files modified since they were last read
+    seen = state.get("seen", {})
+    invalidated = []
+    for key, read_ts in seen.items():
+        file_path = key.rsplit(":", 2)[0]
+        try:
+            if os.path.getmtime(file_path) > read_ts:
+                invalidated.append(key)
+        except OSError:
+            invalidated.append(key)
+    for key in invalidated:
+        del seen[key]
+    state["seen"] = seen
+    return state
 
 
 def _save_state(state: dict) -> None:
@@ -259,6 +308,7 @@ def main() -> None:
     offset = tool_input.get("offset", 0)
     limit = tool_input.get("limit", 0)
 
+    # Include offset/limit in key so different ranges of the same file are allowed
     key = f"{file_path}:{offset}:{limit}"
 
     state = _load_state()
@@ -273,7 +323,7 @@ def main() -> None:
             sys.stdout,
         )
     else:
-        seen[key] = int(time.time())
+        seen[key] = time.time()
         state["seen"] = seen
         _save_state(state)
         json.dump({"decision": "approve"}, sys.stdout)
@@ -283,6 +333,74 @@ if __name__ == "__main__":
     main()
 '''
     _write_file(hooks_dir / "read_once.py", script)
+
+    auto_lint = '''\
+#!/usr/bin/env python3
+"""PostToolUse hook: auto-lint .py files after Write or Edit."""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+
+
+def main() -> None:
+    data = json.load(sys.stdin)
+    file_path = data.get("tool_input", {}).get("file_path", "")
+    if not file_path.endswith(".py") or not os.path.isfile(file_path):
+        return
+    project_root = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
+    for cmd in (
+        ["uv", "run", "ruff", "check", "--fix", file_path],
+        ["uv", "run", "ruff", "format", file_path],
+    ):
+        try:
+            subprocess.run(cmd, cwd=project_root, capture_output=True, timeout=30)
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
+
+if __name__ == "__main__":
+    main()
+'''
+    _write_file(hooks_dir / "auto_lint.py", auto_lint)
+
+    verify_on_stop = """\
+#!/usr/bin/env bash
+# Stop hook: verify ruff+pytest+mypy before Claude finishes its turn.
+# Exits non-zero to force Claude to continue and fix any failures.
+set -uo pipefail
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+# Skip if no Python files changed (avoids running suite on analysis-only sessions)
+changed=$(
+    git diff --name-only HEAD 2>/dev/null
+    git diff --name-only --cached 2>/dev/null
+    git ls-files --others --exclude-standard \'*.py\' 2>/dev/null
+)
+if ! echo "$changed" | grep -q \'\\.py$\'; then
+    exit 0
+fi
+
+errors=""
+ruff_out=$(uv run ruff check . --output-format=concise 2>&1) || errors+="RUFF:\\n$ruff_out\\n\\n"
+pytest_out=$(uv run pytest -x --tb=line -q 2>&1) || errors+="PYTEST:\\n$pytest_out\\n\\n"
+mypy_out=$(uv run mypy src/ --no-error-summary 2>&1) || errors+="MYPY:\\n$mypy_out\\n\\n"
+
+if [ -n "$errors" ]; then
+    echo "=== VERIFICATION FAILED ==="
+    printf "%b" "$errors"
+    echo "Fix the above before finishing."
+    exit 1
+fi
+exit 0
+"""
+    verify_path = hooks_dir / "verify_on_stop.sh"
+    _write_file(verify_path, verify_on_stop)
+    verify_path.chmod(0o755)
 
 
 def _write_claudeignore(project_path: Path) -> None:
@@ -348,7 +466,7 @@ def _write_mcp_config(project_path: Path) -> None:
 def _copy_claude_commands(project_path: Path) -> None:
     """Copy bundled ``.claude/commands/`` templates into the project.
 
-    The 43 command templates provide slash-command shortcuts for
+    The 53 command templates provide slash-command shortcuts for
     analysis, documentation, feature work, quality, and testing.
 
     Args:

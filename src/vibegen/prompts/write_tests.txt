@@ -1,6 +1,10 @@
-TASK
-Your job is to write pytest test cases for the module described below.
-Use the test plan and source code provided — do NOT invent packages or imports.
+think hard
+
+## SCOPE
+Write pytest tests for the module listed below, based ONLY on the test plan and source code
+provided. Do not test behaviour not present in the source code.
+
+## ANCHOR
 
 MODULE
 {{module_path}}
@@ -11,34 +15,41 @@ SPECIFICATION
 TEST PLAN (derived from actual source code)
 {{test_plan}}
 
-SOURCE FILES (actual generated code — base your imports on this)
+SOURCE FILES (actual generated code — base all imports on this)
 {{source_files}}
 
 DEPENDENCY GRAPH
 {{dependency_graph}}
 
-INSTALLED DEPENDENCIES (the ONLY packages available — never import anything else)
+INSTALLED DEPENDENCIES (ONLY these external packages are available)
 {{installed_deps}}
 
 CONSTRAINTS
 {{constraints}}
 
-IMPORT RULES
-- Always import from the installed package name, never from src/:
-    Correct : from {{package}}.module import SomeClass
-    WRONG   : from src.{{package}}.module import SomeClass
-- Only import external packages that appear in INSTALLED DEPENDENCIES.
-- Use `pytest` for all test infrastructure.
+## OUTCOME
+Your test file passes when ALL of the following hold:
+1. Each item in the TEST PLAN has at least one corresponding test function.
+2. For each tested function/method: one happy-path test, one edge-case test,
+   one failure-mode test (raises expected exception or returns sentinel value).
+3. All imports use the installed package name:
+     Correct : from {{package}}.module import SomeClass
+     WRONG   : from src.{{package}}.module import SomeClass
+4. Only packages listed in INSTALLED DEPENDENCIES are imported (plus pytest/stdlib).
+5. No test uses `assert True` or trivially-passing assertions.
 
 OUTPUT FORMAT
-Return one or more file blocks in the following format:
+Return file blocks only, using this exact delimiter:
 
 --- file: <path> ---
-<file contents>
+<complete file contents>
 
-Separate multiple files with the same delimiter. Paths are relative to the repo root.
-Do NOT wrap the output in markdown fences or add any extra text.
+Paths are relative to the repo root. No markdown fences. No extra text.
 
 Example:
 --- file: tests/test_<module>.py ---
-# pytest code here
+"""Tests for <module>."""
+from __future__ import annotations
+import pytest
+from {{package}}.module import SomeClass
+# test code here

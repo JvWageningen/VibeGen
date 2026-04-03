@@ -1,5 +1,11 @@
-TASK
-Tests are failing. Analyze the pytest output and inspect the source code for the failing module.
+think
+
+## SCOPE
+Fix ONLY the test failures listed in the ERROR LOG below.
+Do not refactor passing tests. Do not change test assertions to be weaker.
+If a source file bug is the root cause, fix the source file — do not work around it in the test.
+
+## ANCHOR
 
 ERROR LOG
 {{error_log}}
@@ -13,21 +19,26 @@ DEPENDENCY GRAPH
 SOURCE CONTEXT
 {{source}}
 
-GOAL
-Fix the bug(s) so that the tests pass.
-
-CONSTRAINTS
-- Don't weaken assertions.
-- Keep change minimal and consistent with the project style.
-- IMPORTANT: Tests must use the installed package name in imports (no src. prefix).
-  Correct:   from word_counter.module import SomeClass
-  WRONG:     from src.word_counter.module import SomeClass
+## OUTCOME
+Your output is correct when ALL of the following hold:
+1. Every failing test in the ERROR LOG now passes.
+2. No previously-passing test is broken by your change.
+3. Changes are minimal — only the lines required to fix each failure are modified.
+4. Imports use the installed package name (never `src.` prefix):
+     Correct : from package.module import SomeClass
+     WRONG   : from src.package.module import SomeClass
+5. Each output block targets a specific file and function identified in the error log.
 
 OUTPUT FORMAT
-Return the fixed files as file blocks in the following format:
+For each fix, output a block using this delimiter:
+
+--- file: <path> --- function: <function_name> ---
+<complete fixed function body>
+
+If an entire file must be rewritten (e.g. import errors), use the file-only form:
 
 --- file: <path> ---
-<file contents>
+<complete fixed file contents>
 
-Separate multiple files using the same delimiter. Paths should be relative to the repo root.
-Do NOT wrap the output in markdown fences or add any extra text outside the file blocks.
+Separate multiple blocks with the same delimiter.
+Paths are relative to the repo root. No markdown fences. No extra text.

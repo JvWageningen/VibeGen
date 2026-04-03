@@ -364,7 +364,7 @@ def _generate_code(
         spec: Parsed spec dict.
         package_name: Python package name (snake_case).
         model_provider: ``"claude"`` or ``"ollama"``.
-        model: Model identifier.
+        model: Model identifier string.
         show_output: Print LLM output when True.
         sandbox: Optional Docker sandbox config.
         plan: Optional TaskPlan for progress tracking.
@@ -389,6 +389,7 @@ def _generate_code(
         "dependencies before importing them."
     )
 
+    result: bool | str
     if model_provider == "claude":
         result = _generate_code_claude(
             project_path,
@@ -603,7 +604,7 @@ def _generate_code_ollama(
         spec: Parsed spec dict.
         package_name: Python package name.
         model_provider: LLM provider string.
-        model: Model identifier.
+        model: Model identifier string.
         constraints: Code constraints string.
         installed_deps: Installed dependencies string.
         show_output: Print LLM output when True.
@@ -1213,7 +1214,7 @@ def _generate_and_fix_tests(
         spec: Parsed spec dict.
         package_name: Python package name.
         model_provider: ``"claude"`` or ``"ollama"``.
-        model: Model identifier.
+        model: Model identifier string.
         max_fix_attempts: Number of test-fix retry cycles.
         show_output: Print LLM output when True.
         sandbox: Optional Docker sandbox config.
@@ -1303,11 +1304,24 @@ def _generate_and_fix_tests(
     # Pass 4: re-format after all edits
     _format_code(project_path, sandbox=sandbox)
 
+    fix_log: list[dict[str, int]] = []
+    _failures_prev = len(_parse_pytest_failures(""))  # 0 baseline
+
     for attempt in range(1, max_fix_attempts + 1):
         if plan and attempt == 1:
             plan.start("run_tests")
         _print_step(f"Running tests (attempt {attempt}/{max_fix_attempts})...")
         passed, output = _run_tests(project_path, sandbox=sandbox)
+        _failures_now = len(_parse_pytest_failures(output))
+        fix_log.append(
+            {
+                "attempt": attempt,
+                "failures_before": _failures_prev,
+                "failures_after": _failures_now,
+                "llm_called": 0,
+            }
+        )
+        _failures_prev = _failures_now
         if passed:
             if plan:
                 plan.complete("run_tests", "all passing")
@@ -1382,14 +1396,17 @@ def _generate_and_fix_tests(
                 sandbox=sandbox,
             )
 
+        failure_context = output[-3000:]
+
         # Step 2: fix test failures
+        fix_log[-1]["llm_called"] = 1
         if model_provider == "claude" and session_id:
             # Claude session: ask it to fix failures directly
             _, session_id = _run_claude_session(
                 prompt=(
                     "The tests are failing. Here is the "
                     "pytest output:\n\n"
-                    f"{output[-3000:]}\n\n"
+                    f"{failure_context}\n\n"
                     "Fix the failing tests. Read the test "
                     "files and source files as needed, then "
                     "edit the test files to make them pass."
@@ -1441,6 +1458,15 @@ def _generate_and_fix_tests(
                 )
 
         _format_code(project_path, sandbox=sandbox)
+
+    # Print fix-loop summary
+    if fix_log:
+        total_resolved = fix_log[0]["failures_before"] - fix_log[-1]["failures_after"]
+        llm_calls = sum(e["llm_called"] for e in fix_log)
+        _print_step(
+            f"Fix summary: {total_resolved} failure(s) resolved, "
+            f"LLM called {llm_calls}x over {len(fix_log)} attempt(s)"
+        )
 
     try:
         _run_cmd(["git", "add", "-A"], cwd=project_path, check=False)

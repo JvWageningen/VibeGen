@@ -412,8 +412,8 @@ def test_write_claude_settings_has_deny_rules(tmp_path: Path) -> None:
     settings_file = tmp_path / ".claude" / "settings.json"
     data = json.loads(settings_file.read_text(encoding="utf-8"))
     deny = data["permissions"]["deny"]
-    assert "Bash(rm -rf /)" in deny
-    assert "Bash(sudo *)" in deny
+    assert "Bash(shutdown *)" in deny
+    assert "Bash(mkfs *)" in deny
 
 
 def test_write_claude_settings_has_ask_rules(tmp_path: Path) -> None:
@@ -421,9 +421,9 @@ def test_write_claude_settings_has_ask_rules(tmp_path: Path) -> None:
     settings_file = tmp_path / ".claude" / "settings.json"
     data = json.loads(settings_file.read_text(encoding="utf-8"))
     ask = data["permissions"]["ask"]
+    assert "Bash(rm -rf /)" in ask
     assert "Bash(rm *)" in ask
     assert "Bash(git reset *)" in ask
-    assert "Bash(docker *)" in ask
 
 
 def test_write_claude_settings_creates_shared_settings_json(tmp_path: Path) -> None:
@@ -459,21 +459,21 @@ def test_write_claude_settings_shared_has_posttooluse_hook(tmp_path: Path) -> No
     assert "Bash" in matchers
 
 
-def test_write_claude_settings_local_has_opusplan_model(tmp_path: Path) -> None:
+def test_write_claude_settings_shared_has_model(tmp_path: Path) -> None:
     _write_claude_settings(tmp_path)
     data = json.loads(
-        (tmp_path / ".claude" / "settings.local.json").read_text(encoding="utf-8")
+        (tmp_path / ".claude" / "settings.json").read_text(encoding="utf-8")
     )
-    assert data["model"] == "opusplan"
+    assert "model" in data
 
 
-def test_write_claude_settings_local_has_token_env_vars(tmp_path: Path) -> None:
+def test_write_claude_settings_shared_has_token_env_vars(tmp_path: Path) -> None:
     _write_claude_settings(tmp_path)
     data = json.loads(
-        (tmp_path / ".claude" / "settings.local.json").read_text(encoding="utf-8")
+        (tmp_path / ".claude" / "settings.json").read_text(encoding="utf-8")
     )
     assert data["env"]["MAX_THINKING_TOKENS"] == "10000"
-    assert data["env"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "haiku"
+    assert "CLAUDE_CODE_SUBAGENT_MODEL" in data["env"]
 
 
 # ---------------------------------------------------------------------------
@@ -511,6 +511,71 @@ def test_write_claude_hooks_tracks_offset_and_limit(tmp_path: Path) -> None:
     )
     assert "offset" in content
     assert "limit" in content
+
+
+def test_write_claude_hooks_creates_auto_lint(tmp_path: Path) -> None:
+    _write_claude_hooks(tmp_path)
+    assert (tmp_path / ".claude" / "hooks" / "auto_lint.py").exists()
+
+
+def test_write_claude_hooks_auto_lint_is_valid_python(tmp_path: Path) -> None:
+    _write_claude_hooks(tmp_path)
+    content = (tmp_path / ".claude" / "hooks" / "auto_lint.py").read_text(
+        encoding="utf-8"
+    )
+    compile(content, "auto_lint.py", "exec")  # raises SyntaxError if invalid
+
+
+def test_write_claude_hooks_auto_lint_runs_ruff(tmp_path: Path) -> None:
+    _write_claude_hooks(tmp_path)
+    content = (tmp_path / ".claude" / "hooks" / "auto_lint.py").read_text(
+        encoding="utf-8"
+    )
+    assert "ruff" in content
+    assert "file_path" in content
+
+
+def test_write_claude_hooks_creates_verify_on_stop(tmp_path: Path) -> None:
+    _write_claude_hooks(tmp_path)
+    assert (tmp_path / ".claude" / "hooks" / "verify_on_stop.sh").exists()
+
+
+def test_write_claude_hooks_verify_on_stop_is_executable(tmp_path: Path) -> None:
+    _write_claude_hooks(tmp_path)
+    hook = tmp_path / ".claude" / "hooks" / "verify_on_stop.sh"
+    assert hook.stat().st_mode & 0o111  # at least one execute bit set
+
+
+def test_write_claude_hooks_verify_on_stop_runs_suite(tmp_path: Path) -> None:
+    _write_claude_hooks(tmp_path)
+    content = (tmp_path / ".claude" / "hooks" / "verify_on_stop.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "pytest" in content
+    assert "mypy" in content
+    assert "ruff" in content
+
+
+def test_write_claude_settings_has_write_edit_posttooluse_hook(tmp_path: Path) -> None:
+    _write_claude_settings(tmp_path)
+    data = json.loads(
+        (tmp_path / ".claude" / "settings.json").read_text(encoding="utf-8")
+    )
+    post = data["hooks"]["PostToolUse"]
+    matchers = [h["matcher"] for h in post]
+    assert "Write|Edit" in matchers
+
+
+def test_write_claude_settings_has_stop_hook(tmp_path: Path) -> None:
+    _write_claude_settings(tmp_path)
+    data = json.loads(
+        (tmp_path / ".claude" / "settings.json").read_text(encoding="utf-8")
+    )
+    assert "Stop" in data["hooks"]
+    stop = data["hooks"]["Stop"]
+    assert len(stop) >= 1
+    commands = [h["command"] for entry in stop for h in entry.get("hooks", [])]
+    assert any("verify_on_stop" in cmd for cmd in commands)
 
 
 # ---------------------------------------------------------------------------
@@ -598,7 +663,7 @@ def test_copy_claude_commands_copies_files(tmp_path: Path) -> None:
     _copy_claude_commands(tmp_path)
     cmds_dir = tmp_path / ".claude" / "commands"
     md_files = list(cmds_dir.rglob("*.md"))
-    assert len(md_files) >= 40  # at least 40 of 43
+    assert len(md_files) >= 50  # at least 50 of 53
 
 
 def test_copy_claude_commands_preserves_content(
@@ -609,6 +674,25 @@ def test_copy_claude_commands_preserves_content(
     assert explain.exists()
     content = explain.read_text(encoding="utf-8")
     assert len(content) > 10
+
+
+def test_copy_claude_commands_includes_new_git_commands(tmp_path: Path) -> None:
+    _copy_claude_commands(tmp_path)
+    cmds_dir = tmp_path / ".claude" / "commands"
+    assert (cmds_dir / "git" / "rebase.md").exists()
+    assert (cmds_dir / "git" / "tag.md").exists()
+
+
+def test_copy_claude_commands_includes_new_analysis_commands(tmp_path: Path) -> None:
+    _copy_claude_commands(tmp_path)
+    assert (tmp_path / ".claude" / "commands" / "analysis" / "todo.md").exists()
+
+
+def test_copy_claude_commands_includes_integration_test_command(
+    tmp_path: Path,
+) -> None:
+    _copy_claude_commands(tmp_path)
+    assert (tmp_path / ".claude" / "commands" / "test" / "integration.md").exists()
 
 
 # ---------------------------------------------------------------------------

@@ -81,6 +81,8 @@ dev = [
     "types-requests>=2.32.4.20260107",
     "bandit>=1.9",
     "vulture>=2.15",
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
 ]
 # radon configuration is done via CLI flags; this section exists for future tooling.
 

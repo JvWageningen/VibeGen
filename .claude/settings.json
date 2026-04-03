@@ -1,17 +1,17 @@
 {
+  "model": "opusplan",
   "permissions": {
     "allow": [
       "Bash(*)",
-      "Bash(uv run python -c :*)",
-      "WebSearch",
-      "WebFetch(*)",
       "Read",
-      "Write(/path*)"
+      "Write(*)",
+      "Edit",
+      "Glob",
+      "Grep",
+      "WebSearch",
+      "WebFetch(*)"
     ],
     "deny": [
-      "Bash(rm -rf /)",
-      "Bash(rm -rf /*)",
-      "Bash(sudo *)",
       "Bash(shutdown *)",
       "Bash(reboot *)",
       "Bash(poweroff *)",
@@ -19,6 +19,8 @@
       "Bash(mkfs *)"
     ],
     "ask": [
+      "Bash(rm -rf /)",
+      "Bash(rm -rf /*)",
       "Bash(rm *)",
       "Bash(rmdir *)",
       "Bash(mv *)",
@@ -26,15 +28,13 @@
       "Bash(git reset *)",
       "Bash(git clean *)",
       "Bash(git checkout *)",
-      "Bash(git branch -D *)",
-      "Bash(pip install *)",
-      "Bash(uv pip install *)",
-      "Bash(npm install *)",
-      "Bash(docker *)"
+      "Bash(git branch -D *)"
     ]
   },
   "env": {
-    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50",
+    "MAX_THINKING_TOKENS": "10000",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "claude-haiku-4-5-20251001"
   },
   "hooks": {
     "PreToolUse": [
@@ -54,7 +54,26 @@
         "hooks": [
           {
             "type": "command",
-            "command": "output=$(cat /dev/stdin); lines=$(echo \"$output\" | wc -l); if [ \"$lines\" -gt 200 ]; then echo \"$output\" | head -100; echo ''; echo \"... ($lines total lines, middle truncated) ...\"; echo ''; echo \"$output\" | tail -50; else echo \"$output\"; fi"
+            "command": "output=$(cat /dev/stdin); lines=$(echo \"$output\" | wc -l); if echo \"$CLAUDE_TOOL_INPUT_COMMAND\" | grep -q 'pytest'; then threshold=500; else threshold=200; fi; if [ \"$lines\" -gt \"$threshold\" ]; then echo \"$output\" | head -100; echo ''; echo \"... ($lines total lines, middle truncated) ...\"; echo ''; echo \"$output\" | tail -50; else echo \"$output\"; fi"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/auto_lint.py"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/verify_on_stop.sh"
           }
         ]
       }

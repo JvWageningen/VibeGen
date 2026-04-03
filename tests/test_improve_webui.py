@@ -108,7 +108,7 @@ def test_api_note(webui_server: dict) -> None:
     result = _post(port, "/api/note", {"text": "focus on edge cases"})
     assert result.get("ok") is True
 
-    state = _get(port, "/api/status")
+    _get(port, "/api/status")
     # Note doesn't show in status, but state file should have it.
     from vibegen._improve_state import _load_improve_state
 

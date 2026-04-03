@@ -1,6 +1,10 @@
-TASK
-You are a Python test architect. Analyse the actual source code below and produce a
-detailed test plan. Do NOT write any code. Return only the plan text.
+think hard
+
+## SCOPE
+Analyse the actual source code below and produce a detailed test plan.
+Do NOT write any code. Return only the plan text.
+
+## ANCHOR
 
 SPECIFICATION
 {{spec}}
@@ -17,7 +21,13 @@ DEPENDENCY GRAPH
 CONSTRAINTS
 {{constraints}}
 
-OUTPUT FORMAT
+## OUTCOME
+Your test plan is complete when ALL of the following hold:
+1. Every public function/class has at least 3 test cases specified.
+2. Import statements use the correct installed package name (from INSTALLED DEPENDENCIES).
+3. Mock strategy is specified for every external dependency.
+4. At least one edge case and one failure mode per module are covered.
+
 Return a plain-text test plan with these sections:
 
 ## Test Strategy

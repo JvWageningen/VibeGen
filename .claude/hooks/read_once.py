@@ -24,9 +24,24 @@ def _load_state() -> dict:
         if age > MAX_AGE_SECONDS:
             return {"seen": {}}
         with open(STATE_FILE) as f:
-            return json.load(f)
+            state = json.load(f)
     except (json.JSONDecodeError, OSError):
         return {"seen": {}}
+
+    # Invalidate entries for files modified since they were last read
+    seen = state.get("seen", {})
+    invalidated = []
+    for key, read_ts in seen.items():
+        file_path = key.rsplit(":", 2)[0]
+        try:
+            if os.path.getmtime(file_path) > read_ts:
+                invalidated.append(key)
+        except OSError:
+            invalidated.append(key)
+    for key in invalidated:
+        del seen[key]
+    state["seen"] = seen
+    return state
 
 
 def _save_state(state: dict) -> None:
@@ -56,7 +71,7 @@ def main() -> None:
             sys.stdout,
         )
     else:
-        seen[key] = int(time.time())
+        seen[key] = time.time()
         state["seen"] = seen
         _save_state(state)
         json.dump({"decision": "approve"}, sys.stdout)

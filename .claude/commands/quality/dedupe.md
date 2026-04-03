@@ -1,4 +1,15 @@
-Find and merge duplicate logic across the repository.
+think
 
-Read all source files; identify functions/patterns appearing in multiple places.
-For each: create canonical version in a shared module, update all call sites, remove duplicates.
+## Scope
+Find and merge duplicate logic across the repository.
+Do NOT change behaviour — refactor only.
+
+## Anchor
+Run `cymbal search <pattern> --text` to find similar implementations. Identify functions/patterns appearing in multiple places.
+
+## Outcome
+| Duplicate | Locations (file:line) | Canonical Location | Action |
+|-----------|-----------------------|--------------------|--------|
+| `_retry_with_backoff` | src/a.py:12, src/b.py:45 | src/utils.py | consolidated |
+
+For each: create canonical version, update all call sites, remove duplicates. `uv run pytest -x` passes.

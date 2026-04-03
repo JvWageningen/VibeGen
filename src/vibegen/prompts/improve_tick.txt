@@ -1,4 +1,10 @@
-You are iteratively improving an existing Python project.
+think hard
+
+## SCOPE
+Make ONE focused improvement to the Python project per the TASK below.
+Do NOT repeat failed changes. Do NOT fix pre-existing test failures unless that is the task.
+
+## ANCHOR
 
 TASK: {{task}}
 
@@ -15,6 +21,13 @@ USER NOTES:
 
 CHANGELOG:
 {{changelog}}
+
+## OUTCOME
+Your change is correct when ALL of the following hold:
+1. Exactly one focused change was made.
+2. The test suite passes (no new failures introduced by your change).
+3. The change moves the project toward the TASK goal.
+4. No previously-failed change is repeated.
 
 RULES:
 1. Make ONE focused change per iteration.

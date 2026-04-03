@@ -1,3 +1,14 @@
-Add Google-style docstrings to: $ARGUMENTS
+## Scope
+Add Google-style docstrings to all public APIs missing them in: $ARGUMENTS
+Do NOT change logic, signatures, or type hints — documentation only.
 
-Read the source file. Add docstrings to all public APIs missing them: one-line summary, Args (with types), Returns, Raises, Example (where helpful).
+## Anchor
+Read the source file. Identify all public functions, classes, and methods without docstrings.
+
+## Outcome
+For each missing docstring, add:
+- One-line summary
+- `Args:` section with parameter types and descriptions
+- `Returns:` section
+- `Raises:` section (if applicable)
+- `Example:` section (where helpful)

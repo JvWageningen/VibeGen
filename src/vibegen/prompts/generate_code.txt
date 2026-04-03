@@ -1,6 +1,11 @@
-TASK
-Your job is to implement COMPLETE, WORKING Python source code for the project described below.
-Do NOT return a plan, summary, or description. Write the FULL implementation code for every module.
+think hard
+
+## SCOPE
+Implement COMPLETE, WORKING Python source code for every module in the plan below.
+Only implement features described in the SPECIFICATION — no extras, no speculative utilities.
+Do NOT return a plan, summary, or description. Write full implementation code only.
+
+## ANCHOR
 
 IMPLEMENTATION PLAN
 {{plan}}
@@ -14,48 +19,38 @@ REPO STRUCTURE
 CONSTRAINTS
 {{constraints}}
 
-TESTS
-- Write pytest unit tests in a `tests/` directory.
-- Cover edge cases described in the spec.
-- IMPORTANT: Tests must import using the installed package name only.
-  Correct:   from {{package}}.module import SomeClass
-  WRONG:     from src.{{package}}.module import SomeClass  <-- never use src. prefix
+## OUTCOME
+Acceptance criteria — your output passes when ALL of the following hold:
+1. Every module listed in the plan has a corresponding `--- file: src/{{package}}/... ---` block.
+2. Every function has a complete body (no `pass`, `...`, stubs, or ellipses).
+3. Every public function has type hints and a Google-style docstring.
+4. All imports use the installed package name: `from {{package}}.module import X`
+   (NEVER `from src.{{package}}.module import X`).
+5. No module imports a package not present in CONSTRAINTS or stdlib.
+
+FILE PLACEMENT RULES
+- Source code: `src/{{package}}/<module>.py`
+- Tests: `tests/test_<module>.py`
+- Paths are relative to the repo root.
+
+DO NOT WRITE THESE FILES (already exist — overwriting will break the project):
+- pyproject.toml, README.md, CLAUDE.md
+- .vscode/settings.json, .gitignore, .gitattributes, .pre-commit-config.yaml
+- Any .toml, .yaml, .json, or .md file
 
 OUTPUT FORMAT
-Return one or more file blocks in the following format:
+Return file blocks only, using this exact delimiter:
 
 --- file: <path> ---
-<file contents>
+<complete file contents>
 
-Separate multiple files using the same delimiter.
-
-FILE LOCATION GUIDELINES
-- Place all library code under `src/{{package}}/` (e.g. `src/{{package}}/main.py`).
-- Place tests under a `tests/` directory (e.g. `tests/test_main.py`).
-- Paths should always be relative to the repo root.
-
-DO NOT WRITE THESE FILES — they already exist and must not be overwritten:
-- pyproject.toml
-- README.md
-- .vscode/settings.json
-- .gitignore
-- .gitattributes
-- .pre-commit-config.yaml
-- CLAUDE.md
-- Any other .toml, .yaml, .json, or .md config/docs files
-
-Only write Python source files under src/ and test files under tests/.
+Separate multiple files with the same delimiter. No markdown fences around the output.
 
 Example:
 --- file: src/{{package}}/__init__.py ---
-# __init__.py content here
+"""Package init."""
 
 --- file: src/{{package}}/main.py ---
-# main.py content here
-
-CRITICAL RULES:
-- You MUST use the "--- file: <path> ---" delimiter before each file.
-- Write COMPLETE implementation code, not stubs, summaries, or ellipses.
-- Do NOT wrap the entire output in markdown fences.
-- Do NOT return a plan or description instead of code.
-- Every function body must contain real implementation logic.
+"""Main module."""
+from __future__ import annotations
+# full implementation here

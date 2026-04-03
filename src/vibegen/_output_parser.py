@@ -2,48 +2,83 @@
 
 from __future__ import annotations
 
+import ast
+import re
 from pathlib import Path
 
-from ._io import _print_ok, _write_file
+from ._io import _print_ok, _print_warn, _write_file
+
+# Matches: --- file: path --- or --- file: path --- function: name ---
+_DELIMITER_RE = re.compile(
+    r"^---\s*file:\s*(\S+?)(?:\s*---\s*function:\s*(\S+?))?\s*---\s*$"
+)
+# Legacy form: --- path --- (no "file:" keyword)
+_DELIMITER_LEGACY_RE = re.compile(r"^---\s*(\S+?)\s*---\s*$")
+# Separator used in dict keys for function-level blocks.
+_FUNC_SEP = "\x00"
+
+
+def _parse_delimiter(line: str) -> tuple[str, str] | None:
+    """Return ``(file_path, function_name)`` from a delimiter line, or None.
+
+    ``function_name`` is empty string for file-level blocks.
+
+    Args:
+        line: A single line of LLM output.
+
+    Returns:
+        Tuple of path and function name, or None if not a delimiter.
+    """
+    stripped = line.strip()
+    if not (stripped.startswith("---") and stripped.endswith("---")):
+        return None
+    m = _DELIMITER_RE.match(stripped)
+    if m:
+        return (m.group(1), m.group(2) or "")
+    m = _DELIMITER_LEGACY_RE.match(stripped)
+    return (m.group(1), "") if m else None
 
 
 def _parse_generated_files(output: str) -> dict[str, str]:
-    """Parse ``--- file: path ---`` blocks from LLM output.
+    """Parse file and function-level delimiter blocks from LLM output.
+
+    Supports two delimiter forms:
+    - ``--- file: path ---`` → file-level block, key is the plain path.
+    - ``--- file: path --- function: name ---`` → function-level block,
+      key is ``path\\x00func_name`` (use :data:`_FUNC_SEP`).
 
     Args:
         output: Raw LLM response text.
 
     Returns:
-        Mapping of relative file path → cleaned file content.
+        Mapping of key → cleaned content.
     """
     files: dict[str, str] = {}
     lines = output.split("\n")
-    current_file: str | None = None
+    current_key: str | None = None
     current_content: list[str] = []
 
     for line in lines:
-        if line.strip().startswith("---") and line.strip().endswith("---"):
-            trimmed = line.strip()
-            if current_file and current_content:
+        parsed = _parse_delimiter(line)
+        if parsed is not None:
+            if current_key and current_content:
                 content = _clean_file_content(current_content)
                 if content.strip():
-                    files[current_file] = content
+                    files[current_key] = content
 
-            if "file:" in trimmed:
-                path_part = trimmed.replace("--- file:", "").replace("---", "").strip()
-            else:
-                path_part = trimmed.replace("---", "").strip()
-
-            if path_part and not path_part.lower().startswith("end"):
-                current_file = path_part
+            file_path, func_name = parsed
+            if file_path and not file_path.lower().startswith("end"):
+                current_key = (
+                    f"{file_path}{_FUNC_SEP}{func_name}" if func_name else file_path
+                )
                 current_content = []
-        elif current_file:
+        elif current_key:
             current_content.append(line)
 
-    if current_file and current_content:
+    if current_key and current_content:
         content = _clean_file_content(current_content)
         if content.strip():
-            files[current_file] = content
+            files[current_key] = content
 
     return files
 
@@ -99,21 +134,82 @@ def _clean_file_content(lines: list[str]) -> str:
     return "\n".join(result).rstrip("\n")
 
 
+def _merge_function_into_file(dest: Path, func_name: str, new_body: str) -> bool:
+    """Replace a single function in *dest* with *new_body* using AST.
+
+    Locates *func_name* in the existing source, replaces only that function's
+    lines, and writes the result back.  Falls back to a full-file overwrite
+    when the file does not exist or AST parsing fails.
+
+    Args:
+        dest: Absolute path of the source file to update.
+        func_name: Name of the function to replace.
+        new_body: Complete new function source (including ``def`` line).
+
+    Returns:
+        True if the merge succeeded, False if a full overwrite is needed.
+    """
+    if not dest.exists():
+        return False
+    source = dest.read_text(encoding="utf-8")
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+
+    lines = source.splitlines(keepends=True)
+    node = next(
+        (
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name == func_name
+        ),
+        None,
+    )
+    if node is None:
+        return False
+
+    start = node.lineno - 1  # 0-indexed
+    end = node.end_lineno  # exclusive (already 1-past-end)
+    replacement = new_body.rstrip("\n") + "\n"
+    updated = lines[:start] + [replacement] + lines[end:]
+    dest.write_text("".join(updated), encoding="utf-8")
+    return True
+
+
 def _write_generated_files(project_path: Path, files: dict[str, str]) -> int:
-    """Write generated files to the project with LF line endings.
+    """Write generated files; perform targeted function merges where requested.
+
+    Keys from :func:`_parse_generated_files` are either plain relative paths
+    (file-level, full overwrite) or ``path\\x00func_name`` (function-level,
+    targeted merge via :func:`_merge_function_into_file`).
 
     Args:
         project_path: Project root directory.
-        files: Mapping of relative path → content from ``_parse_generated_files``.
+        files: Mapping from :func:`_parse_generated_files`.
 
     Returns:
-        Number of files written.
+        Number of files written or patched.
     """
     count = 0
-    for rel_path, content in files.items():
-        dest = project_path / rel_path
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        _write_file(dest, content)
-        _print_ok(f"Generated: {rel_path}")
+    for key, content in files.items():
+        if _FUNC_SEP in key:
+            rel_path, func_name = key.split(_FUNC_SEP, 1)
+            dest = project_path / rel_path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if _merge_function_into_file(dest, func_name, content):
+                _print_ok(f"Patched: {rel_path}::{func_name}")
+            else:
+                _print_warn(
+                    f"Function '{func_name}' not found in {rel_path}"
+                    " — writing full file."
+                )
+                _write_file(dest, content)
+        else:
+            dest = project_path / key
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            _write_file(dest, content)
+            _print_ok(f"Generated: {key}")
         count += 1
     return count

@@ -1,4 +1,10 @@
-You just completed iteration {{iteration}} of an iterative improvement loop.
+think
+
+## SCOPE
+Evaluate whether iteration {{iteration}} of an improvement loop was an improvement, neutral, or regression.
+Do NOT suggest fixes or make changes.
+
+## ANCHOR
 
 TASK: {{task}}
 
@@ -22,15 +28,13 @@ mypy:
 PREVIOUS ITERATION HISTORY:
 {{history}}
 
-Evaluate whether this iteration was an improvement, neutral, or a regression.
-
-Consider:
-- Did the changes move toward the task goal?
-- Are new test failures caused by the changes (regression) or pre-existing?
-- Did code quality improve or degrade?
-- Is the change meaningful progress, or just noise?
-
+## OUTCOME
 Respond with EXACTLY this JSON and nothing else:
 {"verdict": "improvement", "reasoning": "one sentence explanation"}
 
 Valid verdicts: "improvement", "neutral", "regression"
+
+Criteria:
+- improvement: changes moved toward the task goal AND no new test failures introduced
+- neutral: changes are noise/cosmetic or have no measurable effect on the task goal
+- regression: new test failures caused by the changes, or quality degraded
