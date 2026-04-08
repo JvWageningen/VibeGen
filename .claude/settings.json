@@ -1,5 +1,5 @@
 {
-  "model": "opusplan",
+  "model": "opus",
   "permissions": {
     "allow": [
       "Bash(*)",
@@ -33,9 +33,9 @@
   },
   "env": {
     "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
+    "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
     "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50",
-    "MAX_THINKING_TOKENS": "128000",
-    "CLAUDE_CODE_SUBAGENT_MODEL": "claude-haiku-4-5-20251001"
+    "MAX_THINKING_TOKENS": "128000"
   },
   "hooks": {
     "PreToolUse": [

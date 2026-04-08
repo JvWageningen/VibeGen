@@ -52,3 +52,8 @@ After any code change:
 - Never `pip install`; always `uv add`
 - No bare `except:`; no mutable defaults; no `print()`
 - Commit style: `feat:`, `fix:`, `chore:`, `test:`, `docs:`
+
+## Behavioral Rules
+
+- Prefer visible failure over silent fallback. Never swallow exceptions with defaults or mask errors with placeholder data.
+- When compacting, always preserve: the full list of modified files, test commands used, current plan/approach, and any error messages being debugged.

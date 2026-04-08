@@ -156,7 +156,11 @@ _CLAUDE_PERMISSIONS: dict[str, list[str]] = {
 }
 
 
-def _write_claude_settings(project_path: Path) -> None:
+def _write_claude_settings(
+    project_path: Path,
+    *,
+    effort: str = "default",
+) -> None:
     """Write ``.claude/settings.json`` and ``.claude/settings.local.json``.
 
     ``settings.json`` holds shared config (permissions, autocompact, hooks).
@@ -165,18 +169,32 @@ def _write_claude_settings(project_path: Path) -> None:
 
     Args:
         project_path: Project root directory.
+        effort: Effort tier — ``"max"`` uses opus for everything,
+            ``"default"`` uses opusplan with sonnet subagents,
+            ``"min"`` uses sonnet with haiku subagents.
     """
     claude_dir = project_path / ".claude"
     _ensure_directory(claude_dir)
 
+    effort_configs: dict[str, tuple[str, str | None]] = {
+        "max": ("opusplan", None),
+        "default": ("opusplan", "claude-sonnet-4-6"),
+        "min": ("sonnet", "claude-haiku-4-5-20251001"),
+    }
+    model, subagent_model = effort_configs.get(effort, effort_configs["default"])
+
+    env: dict[str, str] = {
+        "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
+        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50",
+        "MAX_THINKING_TOKENS": "128000",
+    }
+    if subagent_model is not None:
+        env["CLAUDE_CODE_SUBAGENT_MODEL"] = subagent_model
+
     shared: dict[str, object] = {
-        "model": "opusplan",
+        "model": model,
         "permissions": _CLAUDE_PERMISSIONS,
-        "env": {
-            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50",
-            "MAX_THINKING_TOKENS": "10000",
-            "CLAUDE_CODE_SUBAGENT_MODEL": "claude-haiku-4-5-20251001",
-        },
+        "env": env,
         "hooks": {
             "PreToolUse": [
                 {

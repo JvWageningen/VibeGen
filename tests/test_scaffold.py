@@ -467,13 +467,36 @@ def test_write_claude_settings_shared_has_model(tmp_path: Path) -> None:
     assert "model" in data
 
 
-def test_write_claude_settings_shared_has_token_env_vars(tmp_path: Path) -> None:
+def test_write_claude_settings_default_effort_has_sonnet_subagent(
+    tmp_path: Path,
+) -> None:
     _write_claude_settings(tmp_path)
     data = json.loads(
         (tmp_path / ".claude" / "settings.json").read_text(encoding="utf-8")
     )
-    assert data["env"]["MAX_THINKING_TOKENS"] == "10000"
-    assert "CLAUDE_CODE_SUBAGENT_MODEL" in data["env"]
+    assert data["env"]["MAX_THINKING_TOKENS"] == "128000"
+    assert data["env"]["CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING"] == "1"
+    assert data["env"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "claude-sonnet-4-6"
+    assert data["model"] == "opusplan"
+
+
+def test_write_claude_settings_max_effort_no_subagent(tmp_path: Path) -> None:
+    _write_claude_settings(tmp_path, effort="max")
+    data = json.loads(
+        (tmp_path / ".claude" / "settings.json").read_text(encoding="utf-8")
+    )
+    assert "CLAUDE_CODE_SUBAGENT_MODEL" not in data["env"]
+    assert data["env"]["MAX_THINKING_TOKENS"] == "128000"
+    assert data["model"] == "opusplan"
+
+
+def test_write_claude_settings_min_effort_has_haiku_subagent(tmp_path: Path) -> None:
+    _write_claude_settings(tmp_path, effort="min")
+    data = json.loads(
+        (tmp_path / ".claude" / "settings.json").read_text(encoding="utf-8")
+    )
+    assert data["env"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "claude-haiku-4-5-20251001"
+    assert data["model"] == "sonnet"
 
 
 # ---------------------------------------------------------------------------
